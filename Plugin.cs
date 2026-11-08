@@ -3,7 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Dalamud.Game.Command;
+using Dalamud.Game.Text;
 using Dalamud.Game.Text.SeStringHandling;
+using Dalamud.Game.Text.SeStringHandling.Payloads;
 using Dalamud.Interface.ManagedFontAtlas;
 using Dalamud.Interface.Windowing;
 using Dalamud.IoC;
@@ -51,6 +53,14 @@ public sealed class Plugin : IDalamudPlugin
             Configuration.Save();
         }
 
+        // v2: the dark/light switch became a theme choice (Dark, Light or Dalamud).
+        if (Configuration.Version < 2)
+        {
+            Configuration.ThemeChoice = Configuration.DarkMode ? ThemeMode.Dark : ThemeMode.Light;
+            Configuration.Version = 2;
+            Configuration.Save();
+        }
+
         var fontPath = Path.Combine(PluginInterface.AssemblyLocation.Directory?.FullName ?? string.Empty, "Nunito-Black.ttf");
         TitleFont = PluginInterface.UiBuilder.FontAtlas.NewDelegateFontHandle(e => e.OnPreBuild(tk =>
         {
@@ -91,6 +101,7 @@ public sealed class Plugin : IDalamudPlugin
         PluginInterface.UiBuilder.OpenMainUi -= ToggleWindow;
         PluginInterface.UiBuilder.OpenConfigUi -= ToggleWindow;
 
+        Chat.RemoveChatLinkHandler();
         windowSystem.RemoveAllWindows();
         TitleFont.Dispose();
         CommandManager.RemoveHandler(Command);
@@ -144,6 +155,53 @@ public sealed class Plugin : IDalamudPlugin
         return best;
     }
 
+    // ---- chat lines with a clickable "(changelog)" link
+
+    private uint nextLinkId = 1;
+    private readonly Dictionary<uint, (string InternalName, long Ticks)?> chatLinks = new();
+
+    /// <summary>One line per updated plugin: "Updated: name - (changelog)". More than five: the rest share one line.</summary>
+    private void PrintUpdates(IReadOnlyList<UpdateEntry> updates)
+    {
+        foreach (var u in updates.Take(5))
+            PrintLine($"Updated: {u.Name} - ", "(changelog)", (u.InternalName, u.DetectedAt.Ticks));
+
+        if (updates.Count > 5)
+            PrintLine($"and {updates.Count - 5} more - ", "(changelogs)", null);
+    }
+
+    private void PrintLine(string text, string linkText, (string InternalName, long Ticks)? target)
+    {
+        var id = nextLinkId++;
+        chatLinks[id] = target;
+        var link = Chat.AddChatLinkHandler(id, OnChatLink);
+
+        var message = new SeStringBuilder()
+            .AddText("[Will-")
+            .AddUiForeground("o", PinkChatColor())
+            .AddText($"-Patchwisp] {text}")
+            .Add(link)
+            .AddUiForeground(linkText, PinkChatColor())
+            .Add(RawPayload.LinkTerminator)
+            .Build();
+
+        if (Configuration.ChatChannel == XivChatType.None)
+            Chat.Print(message);
+        else
+            Chat.Print(new XivChatEntry { Type = Configuration.ChatChannel, Message = message });
+    }
+
+    private void OnChatLink(uint id, SeString _)
+    {
+        if (!chatLinks.TryGetValue(id, out var target))
+            return;
+
+        if (target is { } t)
+            window.ShowEntry(t.InternalName, t.Ticks);
+        else
+            window.OpenOnRecent();
+    }
+
     private void OnUpdatesDetected(IReadOnlyList<UpdateEntry> updates)
     {
         // Installed versions changed, so refresh the "available" list too.
@@ -151,16 +209,7 @@ public sealed class Plugin : IDalamudPlugin
             Repos.StartCheck();
 
         if (Configuration.PrintToChat)
-        {
-            var names = string.Join(", ", updates.Take(5).Select(u => u.Name));
-            if (updates.Count > 5)
-                names += $" and {updates.Count - 5} more";
-            Chat.Print(new SeStringBuilder()
-                .AddText("[Will-")
-                .AddUiForeground("o", PinkChatColor())
-                .AddText($"-Patchwisp] {updates.Count} plugin(s) updated: {names}. Type {Command} for changelogs.")
-                .Build());
-        }
+            PrintUpdates(updates);
 
         if (Configuration.AutoOpenOnUpdate)
             window.IsOpen = true;

@@ -1,13 +1,14 @@
 using System;
 using System.Collections.Generic;
 using Dalamud.Configuration;
+using Dalamud.Game.Text;
 
 namespace WillOPatchwisp;
 
 [Serializable]
 public class Configuration : IPluginConfiguration
 {
-    public int Version { get; set; } = 1;
+    public int Version { get; set; } = 2;
 
     /// <summary>Open the window automatically when updates are detected.</summary>
     public bool AutoOpenOnUpdate { get; set; } = true;
@@ -21,8 +22,14 @@ public class Configuration : IPluginConfiguration
     /// <summary>Look up the latest versions in your plugin repositories when the game starts.</summary>
     public bool CheckReposOnStartup { get; set; } = true;
 
-    /// <summary>Use the dark version of the theme.</summary>
+    /// <summary>Old dark/light switch, only read once to move existing setups to <see cref="ThemeChoice"/>.</summary>
     public bool DarkMode { get; set; } = true;
+
+    /// <summary>Dark, Light or Dalamud.</summary>
+    public ThemeMode ThemeChoice { get; set; } = ThemeMode.Dark;
+
+    /// <summary>Chat channel for the update lines. <see cref="XivChatType.None"/> = Dalamud's default channel.</summary>
+    public XivChatType ChatChannel { get; set; } = XivChatType.Echo;
 
     /// <summary>Maximum number of entries kept in history.</summary>
     public int MaxHistory { get; set; } = 200;
@@ -37,6 +44,14 @@ public class Configuration : IPluginConfiguration
     public List<UpdateEntry> History { get; set; } = new();
 
     public void Save() => Plugin.PluginInterface.SavePluginConfig(this);
+}
+
+/// <summary>The window's look: the website's dark or light colours, or Dalamud's own style.</summary>
+public enum ThemeMode
+{
+    Dark,
+    Light,
+    Dalamud,
 }
 
 [Serializable]

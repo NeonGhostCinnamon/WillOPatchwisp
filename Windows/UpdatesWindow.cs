@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Numerics;
 using Dalamud.Bindings.ImGui;
+using Dalamud.Game.Text;
 using Dalamud.Interface;
 using Dalamud.Interface.Components;
 using Dalamud.Interface.Utility;
@@ -57,7 +58,7 @@ public class UpdatesWindow : Window
 
     public override void PreDraw()
     {
-        Theme.Dark = plugin.Configuration.DarkMode;
+        Theme.Mode = plugin.Configuration.ThemeChoice;
 
         // Move the window *before* it's drawn, straight to where the mouse is. Moving it halfway through
         // drawing (or by accumulating mouse deltas) is what made it twitch.
@@ -167,7 +168,9 @@ public class UpdatesWindow : Window
             if (bar.Success)
             {
                 var unseen = plugin.Configuration.History.Count(e => !e.Seen);
-                using (var tab = ImRaii.TabItem(unseen > 0 ? $"Recent ({unseen})###recent" : "Recent###recent"))
+                var recentFlags = selectRecentTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
+                selectRecentTab = false;
+                using (var tab = ImRaii.TabItem(unseen > 0 ? $"Recent ({unseen})###recent" : "Recent###recent", recentFlags))
                 {
                     if (tab.Success)
                         DrawRecentTab();
@@ -231,7 +234,7 @@ public class UpdatesWindow : Window
         ImGui.AlignTextToFramePadding();
         ImGui.TextColored(Theme.Text, "Will-");
         ImGui.SameLine(0, 0);
-        Theme.DanglingText("o", Theme.Pink);
+        Theme.DanglingText("o", Theme.BrandPink);
         ImGui.SameLine(0, 0);
         ImGui.TextColored(Theme.Text, "-Patchwisp");
         var nameEnd = ImGui.GetItemRectMax().X;
@@ -316,25 +319,23 @@ public class UpdatesWindow : Window
         var headingH = ImGui.GetItemRectSize().Y;
         var after = ImGui.GetCursorPos();
 
-        // Round buttons, top-right: minimize, theme switch, close.
+        // Round buttons, top-right: theme, minimize, close.
         var y = top.Y + Math.Max(0, (headingH - d) / 2f);
         var right = ImGui.GetWindowContentRegionMax().X;
 
-        ImGui.SetCursorPos(new Vector2(right - buttonsW, y));
+        ImGui.SetCursorPos(new Vector2(right - d * 2 - gap, y));
         if (Theme.IconCircle("##min", minimized ? FontAwesomeIcon.ChevronDown : FontAwesomeIcon.Minus, Theme.Text, d))
             SetMinimized(!minimized);
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(minimized ? "Expand" : "Minimize");
 
-        ImGui.SetCursorPos(new Vector2(right - d * 2 - gap, y));
-        var icon = config.DarkMode ? FontAwesomeIcon.Moon : FontAwesomeIcon.Sun;
-        if (Theme.IconCircle("##mode", icon, config.DarkMode ? Theme.Moon : Theme.Amber, d))
+        ImGui.SetCursorPos(new Vector2(right - buttonsW, y));
+        var mode = config.ThemeChoice;
+        if (Theme.ThemeButton("##theme", ref mode, d))
         {
-            config.DarkMode = !config.DarkMode;
+            config.ThemeChoice = mode;
             config.Save();
         }
-        if (ImGui.IsItemHovered())
-            ImGui.SetTooltip(config.DarkMode ? "Switch to light mode" : "Switch to dark mode");
 
         ImGui.SetCursorPos(new Vector2(right - d, y));
         if (Theme.IconCircle("##close", FontAwesomeIcon.Times, Theme.Text, d))
@@ -483,29 +484,9 @@ public class UpdatesWindow : Window
         {
             changed |= Checkbox("autoopen", "Open Will-o-Patchwisp when a plugin gets updated.", config.AutoOpenOnUpdate, v => config.AutoOpenOnUpdate = v);
             changed |= Checkbox("chat", "Print summary in chat.", config.PrintToChat, v => config.PrintToChat = v);
+            changed |= DrawChatChannel(config);
             changed |= Checkbox("installs", "List newly installed Plugins", config.TrackNewInstalls, v => config.TrackNewInstalls = v);
             changed |= Checkbox("repos", "Check plugin repos for newer versions on startup.", config.CheckReposOnStartup, v => config.CheckReposOnStartup = v);
-
-            ImGui.AlignTextToFramePadding();
-            ImGui.TextColored(Theme.TextSoft, "Theme");
-            ImGui.SameLine();
-            ImGui.SetNextItemWidth(S(160));
-            using (var combo = ImRaii.Combo("##theme", config.DarkMode ? "Dark mode" : "Light mode"))
-            {
-                if (combo.Success)
-                {
-                    if (ImGui.Selectable("Light mode", !config.DarkMode) && config.DarkMode)
-                    {
-                        config.DarkMode = false;
-                        changed = true;
-                    }
-                    if (ImGui.Selectable("Dark mode", config.DarkMode) && !config.DarkMode)
-                    {
-                        config.DarkMode = true;
-                        changed = true;
-                    }
-                }
-            }
 
             ImGui.TextColored(Theme.TextSoft, "History size");
             var max = config.MaxHistory;
@@ -611,43 +592,376 @@ public class UpdatesWindow : Window
 
     // ---------------------------------------------------------------- tab: recent updates
 
+    private enum Period
+    {
+        Today,
+        Yesterday,
+        Last7Days,
+        Last30Days,
+        AllTime,
+        OneDay,
+    }
+
+    private Period period = Period.Last7Days;
+    private DateTime pickedDay;
+
+    // Day cards opened/minimized by hand. Days not in here: only the newest day is open.
+    private readonly Dictionary<DateTime, bool> dayOpen = new();
+
+    // Set by a "(changelog)" link in chat: select the Recent tab and jump to this entry.
+    private bool selectRecentTab;
+    private string? jumpTo;
+    private string? flashKey;
+    private DateTime flashUntil;
+
+    private static string EntryKey(UpdateEntry e) => $"{e.InternalName}|{e.DetectedAt.Ticks}";
+
+    /// <summary>Open the window on the Recent tab with this entry's changelog shown (used by chat links).</summary>
+    public void ShowEntry(string internalName, long detectedTicks)
+    {
+        var e = plugin.Configuration.History.FirstOrDefault(x => x.InternalName == internalName && x.DetectedAt.Ticks == detectedTicks);
+        OpenOnRecent();
+        if (e == null)
+            return;
+
+        period = Period.AllTime;
+        search = string.Empty;
+        dayOpen[e.DetectedAt.Date] = true;
+        var key = EntryKey(e);
+        expanded["r" + key] = true;
+        jumpTo = key;
+        flashKey = key;
+        flashUntil = DateTime.Now.AddSeconds(1.6);
+    }
+
+    /// <summary>Open the window on the Recent tab (used by the "and N more" chat link).</summary>
+    public void OpenOnRecent()
+    {
+        IsOpen = true;
+        if (minimized)
+            SetMinimized(false);
+        selectRecentTab = true;
+    }
+
+    private static string PeriodName(Period p, DateTime day) => p switch
+    {
+        Period.Today => "Today",
+        Period.Yesterday => "Yesterday",
+        Period.Last7Days => "Last 7 days",
+        Period.Last30Days => "Last 30 days",
+        Period.AllTime => "All time",
+        _ => day.ToString("ddd d MMM"),
+    };
+
+    private bool InPeriod(DateTime when)
+    {
+        var today = DateTime.Today;
+        return period switch
+        {
+            Period.Today => when.Date == today,
+            Period.Yesterday => when.Date == today.AddDays(-1),
+            Period.Last7Days => when.Date >= today.AddDays(-6),
+            Period.Last30Days => when.Date >= today.AddDays(-29),
+            Period.OneDay => when.Date == pickedDay,
+            _ => true,
+        };
+    }
+
     private void DrawRecentTab()
     {
         var config = plugin.Configuration;
+
+        // "Show [period]" filter
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.TextSoft, "Show");
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(S(150));
+        using (var combo = ImRaii.Combo("##period", PeriodName(period, pickedDay)))
+        {
+            if (combo.Success)
+            {
+                foreach (var p in new[] { Period.Today, Period.Yesterday, Period.Last7Days, Period.Last30Days, Period.AllTime })
+                {
+                    if (ImGui.Selectable(PeriodName(p, default), period == p))
+                        period = p;
+                }
+
+                var days = config.History.GroupBy(e => e.DetectedAt.Date).OrderByDescending(g => g.Key).ToList();
+                if (days.Count > 0)
+                {
+                    ImGui.Separator();
+                    ImGui.TextColored(Theme.Muted, "Pick a day");
+                    foreach (var g in days)
+                    {
+                        if (ImGui.Selectable($"{g.Key:ddd d MMM}  ({g.Count()})##day{g.Key.Ticks}", period == Period.OneDay && pickedDay == g.Key))
+                        {
+                            period = Period.OneDay;
+                            pickedDay = g.Key;
+                        }
+                    }
+                }
+            }
+        }
+
+        var entries = config.History.Where(e => InPeriod(e.DetectedAt) && Matches(e.Name, e.Changelog)).ToList();
+        var countText = $"{entries.Count} update{(entries.Count == 1 ? "" : "s")}";
+        ImGui.SameLine(ImGui.GetContentRegionMax().X - ImGui.CalcTextSize(countText).X);
+        ImGui.TextColored(Theme.Muted, countText);
 
         using var child = ImRaii.Child("##recent", new Vector2(0, -footerReserve), false);
         if (!child.Success)
             return;
 
-        var entries = config.History.Where(e => Matches(e.Name, e.Changelog)).ToList();
         if (entries.Count == 0)
         {
             Theme.Wrapped(config.History.Count == 0
                 ? "No updates recorded yet. Updates that happen from now on will show up here.\n\n" +
                   "Meanwhile, \"All plugins\" shows the current changelog of every plugin you have, " +
                   "and \"Available\" shows updates you haven't received yet."
-                : "Nothing matches your search.", Theme.Muted);
+                : search.Length > 0
+                    ? "Nothing matches your search."
+                    : "No updates in this period. Pick a longer one under \"Show\".", Theme.Muted);
             return;
         }
 
-        foreach (var batch in entries.GroupBy(e => e.DetectedAt))
+        var first = true;
+        foreach (var day in entries.GroupBy(e => e.DetectedAt.Date).OrderByDescending(g => g.Key))
         {
-            ImGuiHelpers.ScaledDummy(4f);
-            Theme.CenteredText(
-                $"{batch.Key:dddd d MMMM yyyy, HH:mm}  -  {batch.Count()} plugin{(batch.Count() == 1 ? "" : "s")}",
-                Theme.Pink);
+            var open = dayOpen.TryGetValue(day.Key, out var o) ? o : first;
+            first = false;
+            DrawDayCard(day.Key, day.OrderByDescending(e => e.DetectedAt).ToList(), open);
+        }
+    }
 
-            foreach (var e in batch)
+    /// <summary>One card per day: a header you can click to minimize, then one row per updated plugin.</summary>
+    private void DrawDayCard(DateTime day, List<UpdateEntry> rows, bool open)
+    {
+        Theme.Card($"day{day.Ticks}", () =>
+        {
+            var left = Theme.CardInnerLeft;
+            var right = Theme.CardInnerRight;
+            var lineH = ImGui.GetTextLineHeight();
+
+            // Header: chevron, date, "N plugins" on the right. Click anywhere on it to open/minimize.
+            var headTop = ImGui.GetCursorScreenPos();
+            var countText = $"{rows.Count} plugin{(rows.Count == 1 ? "" : "s")}";
+            if (ImGui.InvisibleButton("##head", new Vector2(right - left, lineH)))
+                dayOpen[day] = open = !open;
+            var hovered = ImGui.IsItemHovered();
+            if (hovered)
+                ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+
+            var dl = ImGui.GetWindowDrawList();
+            using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
             {
-                var versions = e.OldVersion == null ? $"installed {e.NewVersion}" : $"{e.OldVersion} -> {e.NewVersion}";
-                DrawCard(
-                    $"r{e.InternalName}{e.DetectedAt.Ticks}", e.Name, versions,
-                    defaultOpen: !e.Seen,
-                    tag: e.Seen ? null : ("NEW", Theme.Green),
-                    subtitle: null,
-                    e.Changelog, e.RepoUrl, version: e.NewVersion, internalName: e.InternalName);
+                var chev = (open ? FontAwesomeIcon.CaretDown : FontAwesomeIcon.CaretRight).ToIconString();
+                var ink = Theme.InkBounds(chev);
+                dl.AddText(headTop + new Vector2((lineH - (ink.Z - ink.X)) / 2f - ink.X, (lineH - (ink.Y + ink.W)) / 2f), ImGui.GetColorU32(Theme.AccentText), chev);
+            }
+            dl.AddText(headTop + new Vector2(lineH + S(4), 0), ImGui.GetColorU32(open || hovered ? Theme.AccentText : Theme.TextSoft), $"{day:dddd d MMMM yyyy}");
+            dl.AddText(new Vector2(right - ImGui.CalcTextSize(countText).X, headTop.Y), ImGui.GetColorU32(Theme.Muted), countText);
+
+            if (!open)
+                return;
+
+            foreach (var e in rows)
+                DrawRecentRow(e, left, right);
+        });
+    }
+
+    private void DrawRecentRow(UpdateEntry e, float left, float right)
+    {
+        var style = ImGui.GetStyle();
+        var key = EntryKey(e);
+        var id = "r" + key;
+        var open = expanded.TryGetValue(id, out var o) && o;
+        var dl = ImGui.GetWindowDrawList();
+
+        // thin divider above each row
+        ImGuiHelpers.ScaledDummy(1f);
+        var top = ImGui.GetCursorScreenPos().Y;
+        dl.AddLine(new Vector2(left - S(12), top), new Vector2(right + S(12), top), ImGui.GetColorU32(Theme.Border with { W = Theme.Border.W * 0.5f }));
+        ImGuiHelpers.ScaledDummy(2f);
+
+        var rowTop = ImGui.GetCursorScreenPos();
+        var pillH = ImGui.GetTextLineHeight() + S(2);
+
+        // Lit up for a moment after a "(changelog)" link in chat jumped here.
+        if (flashKey == key && DateTime.Now < flashUntil)
+        {
+            var a = (float)((flashUntil - DateTime.Now).TotalSeconds / 1.6);
+            dl.AddRectFilled(new Vector2(left - S(12), rowTop.Y - S(3)), new Vector2(right + S(12), rowTop.Y + pillH + S(3)),
+                ImGui.GetColorU32(Theme.BrandPink with { W = 0.3f * Math.Clamp(a * 1.5f, 0f, 1f) }));
+        }
+
+        // Pills on the right: NEW (until you've opened it) and Show/Hide.
+        var toggleText = open ? "Hide" : "Show";
+        var isNew = !e.Seen;
+        var pillsW = Theme.PillWidth(toggleText) + (isNew ? Theme.PillWidth("NEW") + style.ItemSpacing.X : 0);
+
+        // Left: time, name, versions (wrapping before the pills)
+        ImGui.BeginGroup();
+        ImGui.TextColored(Theme.Muted, e.DetectedAt.ToString("HH:mm"));
+        ImGui.SameLine(0, S(10));
+        var textRight = right - pillsW - style.ItemSpacing.X;
+        ImGui.TextColored(Theme.Text, e.Name);
+        DrawVersions(e.OldVersion, e.NewVersion, textRight);
+        ImGui.EndGroup();
+        var blockBottom = ImGui.GetItemRectMax().Y;
+        var rowHovered = ImGui.IsItemHovered();
+
+        var after = ImGui.GetCursorScreenPos();
+        ImGui.SetCursorScreenPos(new Vector2(right - pillsW, rowTop.Y + Math.Max(0, (blockBottom - rowTop.Y - pillH) / 2f)));
+        if (isNew)
+        {
+            Theme.Pill("NEW", Theme.Green with { W = 0.85f });
+            ImGui.SameLine();
+        }
+        Theme.Pill(toggleText, Theme.Pink);
+        var pillHovered = ImGui.IsItemHovered();
+        ImGui.SetCursorScreenPos(new Vector2(left, Math.Max(after.Y, ImGui.GetItemRectMax().Y + style.ItemSpacing.Y)));
+
+        if (rowHovered || pillHovered)
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+        if ((rowHovered || pillHovered) && ImGui.IsMouseClicked(ImGuiMouseButton.Left))
+        {
+            open = !open;
+            expanded[id] = open;
+            if (open && !e.Seen)
+            {
+                e.Seen = true;
+                plugin.Configuration.Save();
             }
         }
+
+        if (jumpTo == key)
+        {
+            ImGui.SetScrollHereY(0.25f);
+            jumpTo = null;
+            if (!e.Seen)
+            {
+                e.Seen = true;
+                plugin.Configuration.Save();
+            }
+        }
+
+        if (!open)
+            return;
+
+        // Changelog, indented under the name with a thin accent line on its left.
+        var indent = S(44);
+        var noteTop = ImGui.GetCursorScreenPos();
+        ImGui.Indent(indent);
+        using (ImRaii.TextWrapPos(ImGui.GetCursorPosX() + (right - left - indent)))
+        {
+            if (e.Changelog != null)
+                Theme.Wrapped(e.Changelog, Theme.TextSoft);
+            else
+                DrawGitHubFallback(e.RepoUrl, e.NewVersion);
+
+            ImGuiHelpers.ScaledDummy(1f);
+            if (e.RepoUrl != null)
+            {
+                if (Theme.SmallButton($"Open repository##{key}"))
+                    Util.OpenLink(e.RepoUrl);
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(e.RepoUrl);
+                ImGui.SameLine();
+            }
+
+            var ignored = plugin.IsIgnored(e.InternalName);
+            if (Theme.SmallButton($"{(ignored ? "Stop ignoring" : "Ignore")}##{key}"))
+                plugin.SetIgnored(e.InternalName, !ignored);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(ignored
+                    ? "Show update alerts for this plugin again."
+                    : "Hide this plugin's updates: no alerts, not in \"Available\" or \"Update all\". You can undo this in Settings.");
+        }
+        ImGui.Unindent(indent);
+        var noteBottom = ImGui.GetItemRectMax().Y;
+        dl.AddLine(new Vector2(left + indent - S(10), noteTop.Y), new Vector2(left + indent - S(10), noteBottom),
+            ImGui.GetColorU32(Theme.Pink), S(2));
+        ImGuiHelpers.ScaledDummy(2f);
+    }
+
+    /// <summary>
+    /// "1.0.0.0 -> 1.0.0.1" where only the numbers that changed are in the accent colour; the rest is grey.
+    /// New installs show "installed 1.0.0.0". Wraps to the next line when it doesn't fit before <paramref name="rightEdge"/>.
+    /// </summary>
+    private void DrawVersions(string? oldVersion, string newVersion, float rightEdge)
+    {
+        var pieces = new List<(string Text, Vector4 Color)>();
+        if (oldVersion == null)
+        {
+            pieces.Add(($"installed {newVersion}", Theme.Muted));
+        }
+        else
+        {
+            pieces.Add(($"{oldVersion} -> ", Theme.Muted));
+            var a = oldVersion.Split('.');
+            var b = newVersion.Split('.');
+            for (var i = 0; i < b.Length; i++)
+            {
+                if (i > 0)
+                    pieces.Add((".", Theme.Muted));
+                var changed = i >= a.Length || a[i] != b[i];
+                pieces.Add((b[i], changed ? Theme.AccentText : Theme.Muted));
+            }
+        }
+
+        var total = pieces.Sum(p => ImGui.CalcTextSize(p.Text).X);
+        var x = ImGui.GetItemRectMax().X + S(8);
+        if (x + total <= rightEdge)
+            ImGui.SameLine(0, S(8));
+        else
+            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + S(44));   // under the name
+
+        for (var i = 0; i < pieces.Count; i++)
+        {
+            if (i > 0)
+                ImGui.SameLine(0, 0);
+            ImGui.TextColored(pieces[i].Color, pieces[i].Text);
+        }
+    }
+
+    /// <summary>Settings: which chat channel the update lines go to.</summary>
+    private static readonly (XivChatType Type, string Name)[] ChatChannels =
+    {
+        (XivChatType.None, "Dalamud default"),
+        (XivChatType.Echo, "Echo"),
+        (XivChatType.SystemMessage, "System Message"),
+        (XivChatType.Notice, "Notice"),
+        (XivChatType.Urgent, "Urgent"),
+        (XivChatType.Debug, "Debug"),
+    };
+
+    private bool DrawChatChannel(Configuration config)
+    {
+        var changed = false;
+        using var disabled = ImRaii.Disabled(!config.PrintToChat);
+        ImGui.SetCursorPosX(ImGui.GetCursorPosX() + ImGui.GetFrameHeight() + ImGui.GetStyle().ItemInnerSpacing.X);
+        ImGui.AlignTextToFramePadding();
+        ImGui.TextColored(Theme.TextSoft, "Chat channel");
+        ImGui.SameLine();
+        ImGui.SetNextItemWidth(S(160));
+        var current = ChatChannels.FirstOrDefault(c => c.Type == config.ChatChannel);
+        using (var combo = ImRaii.Combo("##chatchannel", current.Name ?? config.ChatChannel.ToString()))
+        {
+            if (combo.Success)
+            {
+                foreach (var (type, name) in ChatChannels)
+                {
+                    if (ImGui.Selectable(name, type == config.ChatChannel) && type != config.ChatChannel)
+                    {
+                        config.ChatChannel = type;
+                        changed = true;
+                    }
+                }
+            }
+        }
+        if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+            ImGui.SetTooltip("Where the \"Updated: ...\" lines show up. Pick a channel your chat tabs display.");
+        return changed;
     }
 
     // ---------------------------------------------------------------- tab: available updates
@@ -806,7 +1120,7 @@ public class UpdatesWindow : Window
                 {
                     if (versionsOnSameLine)
                         ImGui.SameLine();
-                    ImGui.TextColored(Theme.Pink, versions);
+                    ImGui.TextColored(Theme.AccentText, versions);
                 }
 
                 if (subtitle != null)

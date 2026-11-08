@@ -7,6 +7,7 @@ using Dalamud.Bindings.ImGui;
 using Dalamud.Interface;
 using Dalamud.Interface.ManagedFontAtlas;
 using Dalamud.Interface.Utility;
+using Dalamud.Interface.Utility.Raii;
 
 namespace WillOPatchwisp.Windows;
 
@@ -17,23 +18,44 @@ namespace WillOPatchwisp.Windows;
 /// </summary>
 internal static class Theme
 {
-    /// <summary>Dark mode, like the moon toggle on the website.</summary>
-    public static bool Dark { get; set; }
+    /// <summary>Which look the window uses: the website's dark or light colours, or Dalamud's own style.</summary>
+    public static ThemeMode Mode { get; set; } = ThemeMode.Dark;
+
+    /// <summary>True for the dark website colours and for Dalamud's style (which is dark too).</summary>
+    public static bool Dark => Mode != ThemeMode.Light;
+
+    /// <summary>Use the colours of the Dalamud style the player has selected.</summary>
+    public static bool UseDalamud => Mode == ThemeMode.Dalamud;
+
+    // Dalamud's style colours, read at the start of every frame (so a style change shows right away).
+    private static Vector4[] dalamudColors = Array.Empty<Vector4>();
+    private static Vector4 D(ImGuiCol col) => (int)col < dalamudColors.Length ? dalamudColors[(int)col] : new Vector4(1f, 1f, 1f, 1f);
 
     // Light: the site's default grey-violet. Dark: the site's body.dark colours.
-    public static Vector4 Background => Dark ? Rgb(43, 43, 52) : Rgb(107, 107, 121);
+    public static Vector4 Background => UseDalamud ? D(ImGuiCol.WindowBg) : Dark ? Rgb(43, 43, 52) : Rgb(107, 107, 121);
     public static Vector4 TitleBg    => Dark ? Rgb(34, 34, 42) : Rgb(88, 88, 102);
     public static Vector4 TitleBgOn  => Dark ? Rgb(40, 38, 50) : Rgb(96, 92, 112);
-    public static Vector4 Text       => Dark ? Rgb(220, 216, 216) : Rgb(235, 231, 231);
-    public static Vector4 TextSoft   => Text with { W = 0.85f };
-    public static Vector4 Muted      => Text with { W = Dark ? 0.55f : 0.60f };
-    public static Vector4 Glass      => new(1f, 1f, 1f, Dark ? 0.05f : 0.08f);
-    public static Vector4 GlassHover => new(1f, 1f, 1f, Dark ? 0.10f : 0.14f);
-    public static Vector4 Border     => new(1f, 1f, 1f, Dark ? 0.18f : 0.25f);
-    public static Vector4 Field      => new(1f, 1f, 1f, Dark ? 0.07f : 0.10f);
+    public static Vector4 Text       => UseDalamud ? D(ImGuiCol.Text) : Dark ? Rgb(220, 216, 216) : Rgb(235, 231, 231);
+    public static Vector4 TextSoft   => Text with { W = 0.92f };
+    // Secondary text: lighter than before (was 0.55 / 0.60) so it's easier to read.
+    public static Vector4 Muted      => Text with { W = Dark ? 0.72f : 0.76f };
+    public static Vector4 Glass      => UseDalamud ? D(ImGuiCol.FrameBg) with { W = D(ImGuiCol.FrameBg).W * 0.6f } : new(1f, 1f, 1f, Dark ? 0.05f : 0.08f);
+    public static Vector4 GlassHover => UseDalamud ? D(ImGuiCol.FrameBgHovered) : new(1f, 1f, 1f, Dark ? 0.10f : 0.14f);
+    public static Vector4 Border     => UseDalamud ? D(ImGuiCol.Border) with { W = Math.Max(D(ImGuiCol.Border).W, 0.5f) } : new(1f, 1f, 1f, Dark ? 0.18f : 0.25f);
+    public static Vector4 Field      => UseDalamud ? D(ImGuiCol.FrameBg) : new(1f, 1f, 1f, Dark ? 0.07f : 0.10f);
 
-    public static readonly Vector4 Pink     = Rgb(255, 126, 182);
-    public static readonly Vector4 PinkDark = Rgb(211, 20, 103);
+    /// <summary>The website pink. Always used for the swinging "o", whatever the theme.</summary>
+    public static readonly Vector4 BrandPink = Rgb(255, 126, 182);
+
+    /// <summary>Accent fill (buttons, pills, bars): pink, or Dalamud's button colour in the Dalamud theme.</summary>
+    public static Vector4 Pink     => UseDalamud ? D(ImGuiCol.Button) : BrandPink;
+    public static Vector4 PinkDark => UseDalamud ? D(ImGuiCol.ButtonActive) : Rgb(211, 20, 103);
+
+    /// <summary>Accent for text (day headings, changed version numbers): pink, or plain text colour in the Dalamud theme.</summary>
+    public static Vector4 AccentText => UseDalamud ? D(ImGuiCol.Text) : BrandPink;
+
+    /// <summary>Outline of filled pills and badges: white, or Dalamud's border colour.</summary>
+    public static Vector4 Outline => UseDalamud ? Border : White;
     public static readonly Vector4 White    = new(1f, 1f, 1f, 1f);
     public static readonly Vector4 Green    = Rgb(120, 220, 150);
     public static readonly Vector4 Amber    = Rgb(242, 185, 95);
@@ -41,9 +63,9 @@ internal static class Theme
 
     // White on pink is only 2.4:1 contrast. In dark mode, pink controls use dark plum text instead (6.9:1),
     // and turn lighter pink on hover (8.6:1). Light mode keeps the website's white-on-pink look.
-    public static Vector4 OnPink        => Dark ? Rgb(38, 30, 42) : White;
-    public static Vector4 ButtonHover   => Dark ? Rgb(255, 160, 205) : PinkDark;
-    public static Vector4 ButtonPressed => Dark ? Rgb(240, 105, 165) : PinkDark;
+    public static Vector4 OnPink        => UseDalamud ? D(ImGuiCol.Text) : Dark ? Rgb(38, 30, 42) : White;
+    public static Vector4 ButtonHover   => UseDalamud ? D(ImGuiCol.ButtonHovered) : Dark ? Rgb(255, 160, 205) : PinkDark;
+    public static Vector4 ButtonPressed => UseDalamud ? D(ImGuiCol.ButtonActive) : Dark ? Rgb(240, 105, 165) : PinkDark;
 
     private static int colorCount;
     private static int varCount;
@@ -52,10 +74,21 @@ internal static class Theme
 
     private static float S(float v) => v * ImGuiHelpers.GlobalScale;
 
+    /// <summary>Corner radius: the website's soft corners, or Dalamud's own frame rounding in the Dalamud theme.</summary>
+    public static float R(float v) => UseDalamud ? ImGui.GetStyle().FrameRounding : S(v);
+
     public static void Push()
     {
         colorCount = 0;
         varCount = 0;
+
+        if (UseDalamud)
+        {
+            // Keep Dalamud's style as it is; only remember its colours for the custom-drawn parts.
+            dalamudColors = ImGui.GetStyle().Colors.ToArray();
+            Color(ImGuiCol.ChildBg, new Vector4(0, 0, 0, 0));
+            return;
+        }
 
         Color(ImGuiCol.WindowBg, Background with { W = 0.97f });
         Color(ImGuiCol.ChildBg, new Vector4(0, 0, 0, 0));
@@ -149,6 +182,7 @@ internal static class Theme
     {
         var h = ImGui.GetFrameHeight() + S(4);
         var gap = S(7);
+        rainbow &= !UseDalamud;
         string iconStr = icon.ToIconString();
         Vector4 iconInk;
         using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
@@ -163,8 +197,8 @@ internal static class Theme
         var active = ImGui.IsItemActive();
 
         var dl = ImGui.GetWindowDrawList();
-        dl.AddRectFilled(pos, pos + new Vector2(w, h), ImGui.GetColorU32(active ? GlassHover with { W = GlassHover.W + 0.06f } : hovered ? GlassHover : Glass), S(10));
-        dl.AddRect(pos, pos + new Vector2(w, h), ImGui.GetColorU32(hovered ? Pink : Border), S(10), ImDrawFlags.None, hovered ? S(1.6f) : S(1.2f));
+        dl.AddRectFilled(pos, pos + new Vector2(w, h), ImGui.GetColorU32(active ? GlassHover with { W = GlassHover.W + 0.06f } : hovered ? GlassHover : Glass), R(10));
+        dl.AddRect(pos, pos + new Vector2(w, h), ImGui.GetColorU32(hovered ? (UseDalamud ? Text : Pink) : Border), R(10), ImDrawFlags.None, hovered ? S(1.6f) : S(1.2f));
 
         var startX = pos.X + (w - (iconW + gap + labelW)) / 2f;
         var cy = pos.Y + h / 2f;
@@ -211,8 +245,9 @@ internal static class Theme
         var dl = ImGui.GetWindowDrawList();
         var fill = on ? Pink : Glass;
         var textCol = on ? OnPink : Muted;
-        dl.AddRectFilled(pos, pos + new Vector2(w, height), ImGui.GetColorU32(fill), height / 2f);
-        dl.AddRect(pos, pos + new Vector2(w, height), ImGui.GetColorU32(on ? White : Border), height / 2f, ImDrawFlags.None, S(1.5f));
+        var round = UseDalamud ? R(0) : height / 2f;
+        dl.AddRectFilled(pos, pos + new Vector2(w, height), ImGui.GetColorU32(fill), round);
+        dl.AddRect(pos, pos + new Vector2(w, height), ImGui.GetColorU32(on ? Outline : Border), round, ImDrawFlags.None, S(1.5f));
 
         var startX = pos.X + (w - (iconW + gap + labelW)) / 2f;
         var cy = pos.Y + height / 2f;
@@ -310,7 +345,7 @@ internal static class Theme
                 ImGui.SameLine(0, 0);
 
             if (parts[i].Pink)
-                DanglingText(parts[i].Text, Pink);
+                DanglingText(parts[i].Text, BrandPink);
             else
                 ImGui.TextColored(Text, parts[i].Text);
         }
@@ -365,10 +400,20 @@ internal static class Theme
         var dl = ImGui.GetWindowDrawList();
         var center = pos + new Vector2(diameter / 2f);
         var radius = diameter / 2f;
-        dl.AddCircleFilled(center, radius, ImGui.GetColorU32(active ? GlassHover with { W = GlassHover.W + 0.06f } : hovered ? GlassHover : Glass), 32);
-        // Thin pink outline (brighter and a touch thicker while hovered).
-        var stroke = pinkStroke ? (hovered ? ButtonHover : Pink with { W = 0.85f }) : (hovered ? Pink : Border);
-        dl.AddCircle(center, radius - 1f, ImGui.GetColorU32(stroke), 32, hovered ? S(2f) : S(1.5f));
+        var fill = ImGui.GetColorU32(active ? GlassHover with { W = GlassHover.W + 0.06f } : hovered ? GlassHover : Glass);
+        if (UseDalamud)
+        {
+            // Dalamud theme: a small rounded square like Dalamud's own buttons.
+            dl.AddRectFilled(pos, pos + new Vector2(diameter), fill, R(0));
+            dl.AddRect(pos, pos + new Vector2(diameter), ImGui.GetColorU32(hovered ? Text : Border), R(0), ImDrawFlags.None, S(1.2f));
+        }
+        else
+        {
+            dl.AddCircleFilled(center, radius, fill, 32);
+            // Thin pink outline (brighter and a touch thicker while hovered).
+            var stroke = pinkStroke ? (hovered ? ButtonHover : Pink with { W = 0.85f }) : (hovered ? Pink : Border);
+            dl.AddCircle(center, radius - 1f, ImGui.GetColorU32(stroke), 32, hovered ? S(2f) : S(1.5f));
+        }
 
         using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
         {
@@ -382,6 +427,63 @@ internal static class Theme
         if (hovered)
             ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
         return clicked;
+    }
+
+    /// <summary>
+    /// Icon-only theme button for the header: moon (Dark), sun (Light) or puzzle piece (Dalamud).
+    /// Click it to pick a theme from a small menu. It never changes size, so the title doesn't move.
+    /// Returns true when the theme was changed.
+    /// </summary>
+    public static bool ThemeButton(string id, ref ThemeMode mode, float diameter)
+    {
+        var (icon, color) = Look(mode);
+        if (IconCircle(id, icon, color, diameter))
+            ImGui.OpenPopup(id + "pop");
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip($"Theme: {Name(mode)}");
+
+        var changed = false;
+        using var popup = ImRaii.Popup(id + "pop");
+        if (!popup.Success)
+            return false;
+
+        foreach (var m in new[] { ThemeMode.Dark, ThemeMode.Light, ThemeMode.Dalamud })
+        {
+            var (mi, _) = Look(m);
+            var start = ImGui.GetCursorScreenPos();
+            var iconW = ImGui.GetTextLineHeight() + S(6);
+            if (ImGui.Selectable($"##{id}{m}", m == mode, ImGuiSelectableFlags.None, new Vector2(ImGui.CalcTextSize("Dalamud").X + iconW + S(8), 0)))
+            {
+                changed = m != mode;
+                mode = m;
+            }
+
+            var dl = ImGui.GetWindowDrawList();
+            using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            {
+                var s = mi.ToIconString();
+                var ink = InkBounds(s);
+                var lineH = ImGui.GetItemRectSize().Y;
+                dl.AddText(start + new Vector2(S(2) + (ImGui.GetTextLineHeight() - (ink.Z - ink.X)) / 2f - ink.X, (lineH - (ink.Y + ink.W)) / 2f), ImGui.GetColorU32(Text), s);
+            }
+            dl.AddText(start + new Vector2(iconW, 0), ImGui.GetColorU32(Text), Name(m));
+        }
+
+        return changed;
+
+        static (FontAwesomeIcon, Vector4) Look(ThemeMode m) => m switch
+        {
+            ThemeMode.Light => (FontAwesomeIcon.Sun, Amber),
+            ThemeMode.Dalamud => (FontAwesomeIcon.PuzzlePiece, Text),
+            _ => (FontAwesomeIcon.Moon, Moon),
+        };
+
+        static string Name(ThemeMode m) => m switch
+        {
+            ThemeMode.Light => "Light",
+            ThemeMode.Dalamud => "Dalamud",
+            _ => "Dark",
+        };
     }
 
     public const string BrandName = "Will-o-Patchwisp";
@@ -406,7 +508,7 @@ internal static class Theme
 
             AddWords(pieces, text[i..k], color);
             pieces.Add(("Will-", color, false));
-            pieces.Add(("o", Pink, true));
+            pieces.Add(("o", BrandPink, true));
             // keep whatever follows the name (e.g. a space) attached to it
             var rest = Regex.Match(text[(k + BrandName.Length)..], @"^\s*").Value;
             pieces.Add(("-Patchwisp" + rest, color, true));
@@ -465,8 +567,8 @@ internal static class Theme
         var size = textSize + pad * 2;
         var pos = ImGui.GetCursorScreenPos();
         var dl = ImGui.GetWindowDrawList();
-        dl.AddRectFilled(pos, pos + size, ImGui.GetColorU32(fill), S(8));
-        dl.AddRect(pos, pos + size, ImGui.GetColorU32(White), S(8));
+        dl.AddRectFilled(pos, pos + size, ImGui.GetColorU32(fill), R(8));
+        dl.AddRect(pos, pos + size, ImGui.GetColorU32(Outline), R(8));
 
         // Centre the visible letters, not the font's line box (which has extra room below for descenders).
         var ink = InkBounds(text);
@@ -515,7 +617,9 @@ internal static class Theme
     /// </summary>
     public static Vector4 TextOn(Vector4 fill)
     {
-        if (fill.X == Pink.X && fill.Y == Pink.Y && fill.Z == Pink.Z)
+        if (UseDalamud)
+            return D(ImGuiCol.Text);
+        if (fill.X == BrandPink.X && fill.Y == BrandPink.Y && fill.Z == BrandPink.Z)
             return OnPink;
 
         static float Lin(float c) => c <= 0.03928f ? c / 12.92f : MathF.Pow((c + 0.055f) / 1.055f, 2.4f);
@@ -563,8 +667,8 @@ internal static class Theme
         var hovered = ImGui.IsMouseHoveringRect(start, end);
 
         dl.ChannelsSetCurrent(0);
-        dl.AddRectFilled(start, end, ImGui.GetColorU32(hovered ? GlassHover : Glass), S(16));
-        dl.AddRect(start, end, ImGui.GetColorU32(hovered ? Pink : Border), S(16));
+        dl.AddRectFilled(start, end, ImGui.GetColorU32(hovered && !UseDalamud ? GlassHover : Glass), R(16));
+        dl.AddRect(start, end, ImGui.GetColorU32(hovered && !UseDalamud ? Pink : Border), R(16));
         dl.ChannelsMerge();
 
         ImGui.SetCursorScreenPos(new Vector2(start.X, end.Y));
