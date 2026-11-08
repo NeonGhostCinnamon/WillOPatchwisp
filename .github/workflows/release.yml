@@ -1,8 +1,9 @@
-# Builds the plugin and publishes it whenever you push a version tag, e.g.:
+# Builds the plugin and publishes it whenever you push a version tag (or publish a release on GitHub), e.g.:
 #   git tag v1.0.1
 #   git push origin v1.0.1
 # The zip is attached to a GitHub release, and repo.json (the custom repository Dalamud reads)
-# is updated with the new version, release time and a changelog made from your commit messages.
+# is updated with the new version, release time and a changelog: your release notes if you wrote any,
+# otherwise your commit messages.
 name: Release
 
 on:
@@ -28,6 +29,8 @@ jobs:
       - name: Version and changelog from the tag
         id: v
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           V="${GITHUB_REF_NAME#v}"
           while [ "$(echo "$V" | tr -cd '.' | wc -c)" -lt 3 ]; do V="$V.0"; done
@@ -36,6 +39,9 @@ jobs:
           if [ -n "$PREV" ]; then RANGE="$PREV..$GITHUB_REF_NAME"; else RANGE="-n 15 $GITHUB_REF_NAME"; fi
           LOG=$(git log --no-merges --pretty='- %s' $RANGE | grep -v 'Update repo.json' || true)
           [ -z "$LOG" ] && LOG="- Version $V"
+          # If you published a release on GitHub with your own notes, use those as the changelog instead.
+          NOTES=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body -q .body 2>/dev/null || true)
+          if [ -n "$(echo "$NOTES" | tr -d '[:space:]')" ]; then LOG=$(echo "$NOTES" | tr -d '\r'); fi
           echo "version=$V" >> "$GITHUB_OUTPUT"
           { echo 'changelog<<CHANGELOG_EOF'; echo "$LOG"; echo 'CHANGELOG_EOF'; } >> "$GITHUB_OUTPUT"
 
