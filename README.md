@@ -5,7 +5,6 @@
 <br><br>
 
 <a href="#install"><img src="images/readme/btn-install.svg" alt="Install in Dalamud" height="46"></a>&nbsp;
-<a href="https://ko-fi.com/willocinnamon"><img src="images/readme/btn-kofi.svg" alt="Support me on Ko-fi" height="46"></a>&nbsp;
 <a href="https://github.com/NeonGhostCinnamon/WillOPlugins"><img src="images/readme/btn-plugins.svg" alt="All my plugins" height="46"></a>
 
 <br><br>
