@@ -1,0 +1,84 @@
+# Builds the plugin and publishes it whenever you push a version tag, e.g.:
+#   git tag v1.0.1
+#   git push origin v1.0.1
+# The zip is attached to a GitHub release, and repo.json (the custom repository Dalamud reads)
+# is updated with the new version, release time and a changelog made from your commit messages.
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+env:
+  PLUGIN: WillOPatchwisp
+
+jobs:
+  release:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Version and changelog from the tag
+        id: v
+        shell: bash
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          while [ "$(echo "$V" | tr -cd '.' | wc -c)" -lt 3 ]; do V="$V.0"; done
+          if ! echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then echo "Bad tag: $GITHUB_REF_NAME"; exit 1; fi
+          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          if [ -n "$PREV" ]; then RANGE="$PREV..$GITHUB_REF_NAME"; else RANGE="-n 15 $GITHUB_REF_NAME"; fi
+          LOG=$(git log --no-merges --pretty='- %s' $RANGE | grep -v 'Update repo.json' || true)
+          [ -z "$LOG" ] && LOG="- Version $V"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          { echo 'changelog<<CHANGELOG_EOF'; echo "$LOG"; echo 'CHANGELOG_EOF'; } >> "$GITHUB_OUTPUT"
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Download Dalamud
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile dalamud.zip
+          Expand-Archive -Force dalamud.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
+
+      - name: Build
+        run: dotnet build -c Release -p:Version=${{ steps.v.outputs.version }}
+
+      - name: Package
+        shell: pwsh
+        run: |
+          # DalamudPackager already made a ready-to-install zip (dll, manifest, images, fonts...)
+          Copy-Item "bin\Release\$env:PLUGIN\latest.zip" "$env:PLUGIN.zip"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ env.PLUGIN }}.zip
+          body: ${{ steps.v.outputs.changelog }}
+
+      - name: Update repo.json
+        shell: bash
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+          CHANGELOG: ${{ steps.v.outputs.changelog }}
+          BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          git fetch origin "$BRANCH"
+          git checkout -B "$BRANCH" "origin/$BRANCH"
+          jq --arg v "$VERSION" --arg c "$CHANGELOG" --argjson t "$(date +%s)" \
+            '.[0].AssemblyVersion = $v | .[0].Changelog = $c | .[0].LastUpdate = $t' repo.json > repo.tmp
+          mv repo.tmp repo.json
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add repo.json
+          git commit -m "Update repo.json to $VERSION" || echo "Nothing to commit"
+          git push origin "$BRANCH"

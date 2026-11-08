@@ -1,0 +1,23 @@
+# Build outputs
+bin/
+obj/
+
+# NuGet
+*.nupkg
+*.snupkg
+packages.lock.json
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+*.suo
+*.cache
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Dalamud SDK generated
+latest.zip

@@ -1,0 +1,17 @@
+<Project Sdk="Dalamud.NET.Sdk/15.0.0">
+  <PropertyGroup>
+    <Version>2.5.0.0</Version>
+    <Description>Shows the changelogs of your Dalamud plugins when they update (falling back to GitHub releases when a plugin has none), lists and installs updates waiting in your plugin repositories, and shows the current changelog of every installed plugin. Open it with /patchwisp.</Description>
+    <PackageProjectUrl>https://github.com/NeonGhostCinnamon/WillOPatchwisp</PackageProjectUrl>
+    <IsPackable>false</IsPackable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Plugin icon (shown in /xlplugins) -->
+    <Content Include="images\icon.png" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    <!-- Nunito Black (SIL Open Font License), the font used on will-o-cinnamon.com -->
+    <Content Include="Nunito-Black.ttf" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    <Content Include="Nunito-OFL.txt" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,15 @@
+{
+  "Author": "NeonGhostCinnamon",
+  "Name": "Will-o-Patchwisp",
+  "Punchline": "Patch notes for your Dalamud plugins.",
+  "Description": "Shows the changelogs of your Dalamud plugins when they update (falling back to GitHub releases when a plugin has none), lists and installs updates waiting in your plugin repositories, and shows the current changelog of every installed plugin. Open it with /patchwisp.",
+  "Tags": [
+    "changelog",
+    "updates",
+    "utility",
+    "plugins"
+  ],
+  "RepoUrl": "https://github.com/NeonGhostCinnamon/WillOPatchwisp",
+  "IconUrl": "https://raw.githubusercontent.com/NeonGhostCinnamon/WillOPatchwisp/HEAD/images/icon.png",
+  "ApplicableVersion": "any"
+}
