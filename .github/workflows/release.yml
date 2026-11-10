@@ -1,18 +1,22 @@
-# Builds the plugin and publishes it whenever you push a version tag (or publish a release on GitHub), e.g.:
-#   git tag v1.0.1
-#   git push origin v1.0.1
-# The zip is attached to a GitHub release, and repo.json (the custom repository Dalamud reads)
-# is updated with the new version, release time and a changelog: your release notes if you wrote any,
-# otherwise your commit messages.
+# Builds and publishes the plugin automatically whenever changes to the plugin are pushed to main.
+# The version goes up by one from the latest release (v1.0.0 -> v1.0.1). To jump further, set a higher
+# <Version> in the .csproj in the same push. The changelog is the titles of the commits that changed the
+# plugin since the last release. The zip is attached to a GitHub release, and repo.json (the custom
+# repository Dalamud reads) is updated with the new version, release time and changelog.
 name: Release
 
 on:
   push:
-    tags:
-      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 env:
   PLUGIN: WillOPatchwisp
@@ -26,52 +30,82 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Version and changelog from the tag
+      - name: Next version and changelog
         id: v
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
-          V="${GITHUB_REF_NAME#v}"
-          while [ "$(echo "$V" | tr -cd '.' | wc -c)" -lt 3 ]; do V="$V.0"; done
-          if ! echo "$V" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then echo "Bad tag: $GITHUB_REF_NAME"; exit 1; fi
-          PREV=$(git describe --tags --abbrev=0 "${GITHUB_REF_NAME}^" 2>/dev/null || true)
-          if [ -n "$PREV" ]; then RANGE="$PREV..$GITHUB_REF_NAME"; else RANGE="-n 15 $GITHUB_REF_NAME"; fi
-          LOG=$(git log --no-merges --pretty='- %s' $RANGE | grep -v 'Update repo.json' || true)
-          [ -z "$LOG" ] && LOG="- Version $V"
-          # If you published a release on GitHub with your own notes, use those as the changelog instead.
-          NOTES=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json body -q .body 2>/dev/null || true)
-          if [ -n "$(echo "$NOTES" | tr -d '[:space:]')" ]; then LOG=$(echo "$NOTES" | tr -d '\r'); fi
-          echo "version=$V" >> "$GITHUB_OUTPUT"
+          git fetch --tags --force
+          norm() { local v="${1#v}"; while [ "$(echo "$v" | tr -cd '.' | wc -c)" -lt 3 ]; do v="$v.0"; done; echo "$v"; }
+
+          PREV=$(git tag -l 'v*' --sort=-v:refname | head -n 1)
+          if [ -n "$PREV" ]; then
+            IFS=. read -r a b c d <<< "$(norm "$PREV")"
+            NEXT="$a.$b.$((c + 1)).0"
+          else
+            NEXT="1.0.0.0"
+          fi
+
+          # A higher <Version> in the .csproj wins, for bigger version jumps.
+          PROJ=$(sed -n 's:.*<Version>\(.*\)</Version>.*:\1:p' "$PLUGIN.csproj" | head -n 1)
+          if [ -n "$PROJ" ]; then
+            PROJ=$(norm "$PROJ")
+            if [ "$PROJ" != "$NEXT" ] && [ "$(printf '%s\n%s\n' "$NEXT" "$PROJ" | sort -V | tail -n 1)" = "$PROJ" ]; then
+              NEXT="$PROJ"
+            fi
+          fi
+          if ! echo "$NEXT" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then echo "Bad version: $NEXT"; exit 1; fi
+          TAG="v${NEXT%.0}"
+
+          # Only commits that changed the plugin itself count (not the README, its images, repo.json or workflows).
+          if [ -n "$PREV" ]; then RANGE="$PREV..HEAD"; else RANGE="-n 15 HEAD"; fi
+          LOG=$(git log --no-merges --pretty='- %s' $RANGE -- . ':!repo.json' ':!README.md' ':!images/readme' ':!.github' || true)
+          if [ -z "$LOG" ] || git rev-parse -q --verify "refs/tags/$TAG" > /dev/null; then
+            echo "Nothing new to release."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           { echo 'changelog<<CHANGELOG_EOF'; echo "$LOG"; echo 'CHANGELOG_EOF'; } >> "$GITHUB_OUTPUT"
 
       - name: Set up .NET
+        if: steps.v.outputs.skip != 'true'
         uses: actions/setup-dotnet@v4
         with:
           dotnet-version: '10.0.x'
 
       - name: Download Dalamud
+        if: steps.v.outputs.skip != 'true'
         shell: pwsh
         run: |
           Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile dalamud.zip
           Expand-Archive -Force dalamud.zip "$env:AppData\XIVLauncher\addon\Hooks\dev"
 
       - name: Build
+        if: steps.v.outputs.skip != 'true'
         run: dotnet build -c Release -p:Version=${{ steps.v.outputs.version }}
 
       - name: Package
+        if: steps.v.outputs.skip != 'true'
         shell: pwsh
         run: |
           # DalamudPackager already made a ready-to-install zip (dll, manifest, images, fonts...)
           Copy-Item "bin\Release\$env:PLUGIN\latest.zip" "$env:PLUGIN.zip"
 
       - name: Create GitHub release
+        if: steps.v.outputs.skip != 'true'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.v.outputs.tag }}
+          target_commitish: ${{ github.sha }}
+          name: ${{ steps.v.outputs.tag }}
           files: ${{ env.PLUGIN }}.zip
           body: ${{ steps.v.outputs.changelog }}
 
       - name: Update repo.json
+        if: steps.v.outputs.skip != 'true'
         shell: bash
         env:
           VERSION: ${{ steps.v.outputs.version }}
