@@ -149,7 +149,6 @@ public class UpdatesWindow : Window
         }
 
         DrawHeader();
-        Theme.CenteredText("Patch notes for your Dalamud plugins", Theme.TextSoft);
         Theme.AccentBar();
         ImGuiHelpers.ScaledDummy(2f);
 
