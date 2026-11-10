@@ -571,10 +571,7 @@ internal static class Theme
         dl.AddRect(pos, pos + size, ImGui.GetColorU32(Outline), R(8));
 
         // Centre the visible letters, not the font's line box (which has extra room below for descenders).
-        var ink = InkBounds(text);
-        var textPos = new Vector2(
-            pos.X + (size.X - textSize.X) / 2f,
-            pos.Y + size.Y / 2f - (ink.Y + ink.W) / 2f);
+        var textPos = new Vector2(pos.X + (size.X - textSize.X) / 2f, pos.Y + PillTextOffset(text));
         dl.AddText(textPos, ImGui.GetColorU32(TextOn(fill)), text);
         ImGui.Dummy(size);
     }
@@ -627,6 +624,17 @@ internal static class Theme
         var vsWhite = 1.05f / (l + 0.05f);
         var vsDark = (l + 0.05f) / 0.0645f; // dark plum (38, 30, 42)
         return vsDark > vsWhite ? Rgb(38, 30, 42) : White;
+    }
+
+    /// <summary>
+    /// How far below the top of a <see cref="Pill"/> its text is drawn. Put normal text next to a pill at this
+    /// height and both sit on the same line.
+    /// </summary>
+    public static float PillTextOffset(string text)
+    {
+        var height = ImGui.CalcTextSize(text).Y + S(2);
+        var ink = InkBounds(text);
+        return height / 2f - (ink.Y + ink.W) / 2f;
     }
 
     public static float PillWidth(string text) => ImGui.CalcTextSize(text).X + S(14);

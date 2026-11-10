@@ -1252,9 +1252,11 @@ public class UpdatesWindow : Window
                 break;
 
             case GitHubLookupStatus.Found:
+                // Text next to the pill sits on the same line as the pill's own letters.
+                var pillTop = ImGui.GetCursorPosY();
                 Theme.Pill("GitHub", Theme.Pink);
                 ImGui.SameLine();
-                ImGui.AlignTextToFramePadding();
+                ImGui.SetCursorPosY(pillTop + Theme.PillTextOffset("GitHub"));
                 Theme.Wrapped(result.Source ?? "From GitHub", Theme.Muted);
                 Theme.Wrapped(result.Text ?? string.Empty, Theme.TextSoft);
                 if (result.Url != null)
