@@ -1135,7 +1135,7 @@ public class UpdatesWindow : Window
         using (ImRaii.TextWrapPos(ImGui.GetCursorPosX() + (right - left - indent)))
         {
             if (changelog != null)
-                Theme.Wrapped(changelog, Theme.TextSoft);
+                DrawChangelog(changelog);
             else
                 DrawGitHubFallback(repoUrl, e.NewVersion);
 
@@ -1463,7 +1463,7 @@ public class UpdatesWindow : Window
 
             ImGuiHelpers.ScaledDummy(2f);
             if (changelog != null)
-                Theme.Wrapped(changelog, Theme.TextSoft);
+                DrawChangelog(changelog);
             else
                 DrawGitHubFallback(repoUrl, version);
 
@@ -1691,7 +1691,10 @@ public class UpdatesWindow : Window
             ImGui.SetCursorScreenPos(new Vector2(x0, ImGui.GetCursorScreenPos().Y));
             ImGui.BeginGroup();
             using (ImRaii.TextWrapPos(ImGui.GetCursorPosX() + (right - x0)))
-                Theme.Wrapped(e.Body.Length > 0 ? e.Body : "No notes for this version.", e.Body.Length > 0 ? Theme.TextSoft : Theme.Muted);
+                if (e.Body.Length > 0)
+                    DrawChangelog(e.Body);
+                else
+                    Theme.Wrapped("No notes for this version.", Theme.Muted);
             ImGui.EndGroup();
             ImGuiHelpers.ScaledDummy(2f);
         }
@@ -1748,6 +1751,155 @@ public class UpdatesWindow : Window
         var clicked = Theme.SmallButton(label);
         ImGui.PopStyleColor(3);
         return clicked;
+    }
+
+    // ---------------------------------------------------------------- changelog text with clickable links
+
+    private static readonly System.Text.RegularExpressions.Regex MdLink = new(@"\[([^\]]+)\]\((https?://[^)\s]+)\)");
+    private static readonly System.Text.RegularExpressions.Regex BareUrl = new(@"https?://[^\s<>()\[\]]+");
+
+    /// <summary>
+    /// A changelog as wrapped text: headings ("## ...") in the accent colour, "*" bullets as "-", bold/code marks
+    /// removed, and every link clickable (pink, underlined, full address in the tooltip). Long GitHub links get a
+    /// short name: "#1393" for a pull request or issue, "7.5.7.5...7.5.8.1" for a compare link.
+    /// </summary>
+    private static void DrawChangelog(string text)
+    {
+        var left = ImGui.GetCursorScreenPos().X;
+        var right = Math.Min(Theme.CardInnerRight, ImGui.GetWindowPos().X + ImGui.GetWindowContentRegionMax().X);
+        if (right - left < S(40))
+            right = left + S(40);
+        var lineH = ImGui.GetTextLineHeight();
+        var spacing = ImGui.GetStyle().ItemSpacing.Y;
+        var dl = ImGui.GetWindowDrawList();
+        var startY = ImGui.GetCursorScreenPos().Y;
+        var y = startY;
+        var blank = false;
+        var n = 0;
+        using var id = ImRaii.PushId(text.GetHashCode());
+
+        foreach (var raw in text.Replace("\r", string.Empty).Split('\n'))
+        {
+            var line = raw.TrimEnd();
+            if (line.Trim().Length == 0)
+            {
+                // Several empty lines in a row: one small gap.
+                if (!blank && n > 0)
+                    y += lineH * 0.5f;
+                blank = true;
+                continue;
+            }
+            blank = false;
+
+            var heading = System.Text.RegularExpressions.Regex.IsMatch(line, @"^\s*#{1,6}\s");
+            line = System.Text.RegularExpressions.Regex.Replace(line, @"^\s*#{1,6}\s*", string.Empty);
+            line = System.Text.RegularExpressions.Regex.Replace(line, @"^(\s*)[*+]\s+", "$1- ");
+            line = line.Replace("**", string.Empty).Replace("__", string.Empty).Replace("`", string.Empty);
+
+            // Pieces: plain words and links.
+            var pieces = new List<(string Text, string? Url)>();
+            var pos = 0;
+            while (pos < line.Length)
+            {
+                var md = MdLink.Match(line, pos);
+                var bare = BareUrl.Match(line, pos);
+                System.Text.RegularExpressions.Match? next = md.Success && (!bare.Success || md.Index <= bare.Index) ? md : bare.Success ? bare : null;
+                if (next == null)
+                {
+                    AddWords(pieces, line[pos..]);
+                    break;
+                }
+                AddWords(pieces, line[pos..next.Index]);
+                if (next == md)
+                {
+                    pieces.Add((md.Groups[1].Value, md.Groups[2].Value));
+                }
+                else
+                {
+                    var url = bare.Value.TrimEnd('.', ',', ';', ':', '!', '?', '\'', '"');
+                    pieces.Add((ShortLink(url), url));
+                    if (url.Length < bare.Value.Length)
+                        AddWords(pieces, bare.Value[url.Length..]);
+                }
+                pos = next.Index + next.Length;
+            }
+
+            var x = left;
+            var indent = line.StartsWith("- ") ? ImGui.CalcTextSize("- ").X : 0f;
+            foreach (var (piece, url) in pieces)
+            {
+                var label = piece;
+                var w = ImGui.CalcTextSize(label.TrimEnd()).X;
+                if (x > left + indent && x + w > right)
+                {
+                    x = left + indent;
+                    y += lineH + spacing * 0.5f;
+                }
+                // A link wider than the whole line: cut it short.
+                if (url != null && w > right - x)
+                {
+                    while (label.Length > 4 && ImGui.CalcTextSize(label + "...").X > right - x)
+                        label = label[..^1];
+                    label += "...";
+                    w = ImGui.CalcTextSize(label).X;
+                }
+
+                var p = new Vector2(x, y);
+                if (url != null)
+                {
+                    ImGui.SetCursorScreenPos(p);
+                    var clicked = ImGui.InvisibleButton($"##l{n}", new Vector2(Math.Max(1, w), lineH));
+                    var hovered = ImGui.IsItemHovered();
+                    var col = ImGui.GetColorU32(hovered ? Theme.Text : Theme.AccentText);
+                    dl.AddText(p, col, label);
+                    dl.AddLine(new Vector2(x, y + lineH), new Vector2(x + w, y + lineH), col, S(1));
+                    if (hovered)
+                    {
+                        ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+                        ImGui.SetTooltip(url);
+                    }
+                    if (clicked)
+                        Util.OpenLink(url);
+                    x += w + ImGui.CalcTextSize(" ").X;
+                }
+                else
+                {
+                    dl.AddText(p, ImGui.GetColorU32(heading ? Theme.AccentText : Theme.TextSoft), label);
+                    x += ImGui.CalcTextSize(label).X;
+                }
+                n++;
+            }
+            y += lineH + spacing * 0.5f;
+        }
+
+        // Reserve the space that was drawn on.
+        ImGui.SetCursorScreenPos(new Vector2(left, startY));
+        ImGui.Dummy(new Vector2(right - left, Math.Max(lineH, y - startY - spacing * 0.5f)));
+    }
+
+    private static void AddWords(List<(string, string?)> pieces, string text)
+    {
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, @"\S+\s*|\s+"))
+            pieces.Add((m.Value, null));
+    }
+
+    /// <summary>Short name for a link: "#1393", "7.5.7.5...7.5.8.1", "abc1234", or the address without "https://".</summary>
+    private static string ShortLink(string url)
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(url, @"^https?://github\.com/[^/]+/[^/]+/(pull|issues)/(\d+)");
+        if (m.Success)
+            return "#" + m.Groups[2].Value;
+        m = System.Text.RegularExpressions.Regex.Match(url, @"^https?://github\.com/[^/]+/[^/]+/compare/([^?#]+)");
+        if (m.Success)
+            return m.Groups[1].Value;
+        m = System.Text.RegularExpressions.Regex.Match(url, @"^https?://github\.com/[^/]+/[^/]+/commit/([0-9a-f]{7})");
+        if (m.Success)
+            return m.Groups[1].Value;
+        m = System.Text.RegularExpressions.Regex.Match(url, @"^https?://github\.com/[^/]+/[^/]+/releases/tag/([^?#]+)");
+        if (m.Success)
+            return m.Groups[1].Value;
+        var shortUrl = System.Text.RegularExpressions.Regex.Replace(url, @"^https?://(www\.)?", string.Empty).TrimEnd('/');
+        return shortUrl.Length > 48 ? shortUrl[..45] + "..." : shortUrl;
     }
 
     /// <summary>Pink underlined text that works like a link.</summary>
@@ -1875,7 +2027,7 @@ public class UpdatesWindow : Window
             case GitHubLookupStatus.Found:
                 // Where it came from, with the word "GitHub" in the accent colour.
                 SourceLine(result.Source ?? "From GitHub");
-                Theme.Wrapped(result.Text ?? string.Empty, Theme.TextSoft);
+                DrawChangelog(result.Text ?? string.Empty);
                 break;
 
             case GitHubLookupStatus.Failed:
