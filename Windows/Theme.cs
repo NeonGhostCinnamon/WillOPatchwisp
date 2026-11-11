@@ -304,6 +304,77 @@ internal static class Theme
         return Vector4.Lerp(Rgb(255, 126, 182), Rgb(176, 128, 255), t);
     }
 
+    /// <summary>
+    /// Border for anything that's busy (loading, checking, updating): pink and purple running around the edge.
+    /// Drawn around <paramref name="min"/>-<paramref name="max"/> with the given corner rounding.
+    /// </summary>
+    public static void BusyBorder(Vector2 min, Vector2 max, float rounding)
+    {
+        var dl = ImGui.GetWindowDrawList();
+        var pts = RoundedRectPath(min, max, Math.Min(rounding, Math.Min(max.X - min.X, max.Y - min.Y) / 2f));
+        var total = 0f;
+        for (var i = 1; i < pts.Count; i++)
+            total += Vector2.Distance(pts[i - 1], pts[i]);
+        if (total <= 0)
+            return;
+
+        var t = (float)ImGui.GetTime();
+        var pink = Rgb(255, 126, 182);
+        var purple = Rgb(176, 128, 255);
+        var run = 0f;
+        for (var i = 1; i < pts.Count; i++)
+        {
+            var len = Vector2.Distance(pts[i - 1], pts[i]);
+            var mid = (run + len / 2f) / total;
+            run += len;
+            // Two pink and two purple stretches, travelling round the edge.
+            var k = (MathF.Cos((mid * 2f - t * 0.45f) * MathF.PI * 2f) + 1f) / 2f;
+            var c = Vector4.Lerp(pink, purple, k);
+            dl.AddLine(pts[i - 1], pts[i], ImGui.GetColorU32(c with { W = 0.3f }), S(3.2f));
+            dl.AddLine(pts[i - 1], pts[i], ImGui.GetColorU32(c), S(1.6f));
+        }
+    }
+
+    /// <summary><see cref="BusyBorder"/> around the last item, a little outside it.</summary>
+    public static void BusyBorderAroundItem(float pad = 2f, float? rounding = null)
+    {
+        var p = new Vector2(S(pad));
+        var min = ImGui.GetItemRectMin() - p;
+        var max = ImGui.GetItemRectMax() + p;
+        BusyBorder(min, max, rounding ?? ImGui.GetStyle().FrameRounding + S(pad));
+    }
+
+    /// <summary>Points along a rounded rectangle, a few pixels apart, ending where it started.</summary>
+    private static List<Vector2> RoundedRectPath(Vector2 a, Vector2 b, float r)
+    {
+        var pts = new List<Vector2>();
+        void Arc(Vector2 c, float from)
+        {
+            for (var i = 0; i <= 6; i++)
+            {
+                var ang = from + MathF.PI / 2f * i / 6f;
+                pts.Add(c + new Vector2(MathF.Cos(ang), MathF.Sin(ang)) * r);
+            }
+        }
+        void Line(Vector2 p0, Vector2 p1)
+        {
+            var n = Math.Max(1, (int)(Vector2.Distance(p0, p1) / S(6)));
+            for (var i = 1; i < n; i++)
+                pts.Add(Vector2.Lerp(p0, p1, (float)i / n));
+        }
+
+        Arc(new Vector2(a.X + r, a.Y + r), MathF.PI);              // top left
+        Line(new Vector2(a.X + r, a.Y), new Vector2(b.X - r, a.Y));
+        Arc(new Vector2(b.X - r, a.Y + r), MathF.PI * 1.5f);       // top right
+        Line(new Vector2(b.X, a.Y + r), new Vector2(b.X, b.Y - r));
+        Arc(new Vector2(b.X - r, b.Y - r), 0f);                    // bottom right
+        Line(new Vector2(b.X - r, b.Y), new Vector2(a.X + r, b.Y));
+        Arc(new Vector2(a.X + r, b.Y - r), MathF.PI * 0.5f);       // bottom left
+        Line(new Vector2(a.X, b.Y - r), new Vector2(a.X, a.Y + r));
+        pts.Add(pts[0]);
+        return pts;
+    }
+
     public enum CheckLook
     {
         /// <summary>Pink, ready to click.</summary>
@@ -348,7 +419,11 @@ internal static class Theme
         }
         dl.AddRectFilled(pos, pos + size, fill, round);
 
-        if (look == CheckLook.Nothing)
+        if (busy)
+        {
+            BusyBorder(pos - new Vector2(S(1)), pos + size + new Vector2(S(1)), round + S(1));
+        }
+        else if (look == CheckLook.Nothing)
         {
             dl.AddRect(pos, pos + size, ImGui.GetColorU32(hovered ? Text : Border), round, ImDrawFlags.None, S(1.2f));
         }

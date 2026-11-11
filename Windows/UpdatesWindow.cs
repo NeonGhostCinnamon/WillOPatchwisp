@@ -417,6 +417,8 @@ public class UpdatesWindow : Window
                 if (Theme.Button(label))
                     UpdateAll();
             }
+            if (updater.IsBusy)
+                Theme.BusyBorderAroundItem();
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
                 ImGui.SetTooltip(updater.IsAvailable
                     ? "Installs all available updates, one after another."
@@ -1046,6 +1048,8 @@ public class UpdatesWindow : Window
                 if (Theme.Button(busy ? "Updating..." : $"Update all plugins ({visible.Count})", new Vector2(ImGui.GetContentRegionAvail().X, 0)))
                     UpdateAll();
             }
+            if (busy)
+                Theme.BusyBorderAroundItem();
             if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled) && !plugin.Updater.IsAvailable)
                 ImGui.SetTooltip("Opens Dalamud's plugin installer on the updates page.");
             ImGuiHelpers.ScaledDummy(2f);
@@ -1241,6 +1245,7 @@ public class UpdatesWindow : Window
                     case UpdateStateKind.Updating:
                         using (ImRaii.Disabled())
                             Theme.SmallButton("Updating...");
+                        Theme.BusyBorderAroundItem();
                         break;
                     case UpdateStateKind.Updated:
                         ImGui.AlignTextToFramePadding();
@@ -1323,9 +1328,14 @@ public class UpdatesWindow : Window
         var gh = repoUrl != null ? plugin.GitHub.GetReleases(repoUrl) : null;
         if (gh is { Status: GitHubLookupStatus.Loading })
         {
+            ImGui.SetCursorPosX(ImGui.GetCursorPosX() + S(4));
+            ImGui.BeginGroup();
             ImGui.TextColored(Theme.AccentText, "Older updates");
             ImGui.SameLine();
             ImGui.TextColored(Theme.Muted, "looking on GitHub...");
+            ImGui.EndGroup();
+            Theme.BusyBorderAroundItem(4f, S(8));
+            ImGuiHelpers.ScaledDummy(2f);
             return;
         }
 
@@ -1624,7 +1634,9 @@ public class UpdatesWindow : Window
         switch (result.Status)
         {
             case GitHubLookupStatus.Loading:
+                ImGui.SetCursorPosX(ImGui.GetCursorPosX() + S(4));
                 Theme.Wrapped("No changelog was included. Looking on GitHub...", Theme.Muted);
+                Theme.BusyBorderAroundItem(4f, S(8));
                 break;
 
             case GitHubLookupStatus.Found:
