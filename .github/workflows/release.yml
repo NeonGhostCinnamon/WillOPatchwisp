@@ -70,6 +70,17 @@ jobs:
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           { echo 'changelog<<CHANGELOG_EOF'; echo "$LOG"; echo 'CHANGELOG_EOF'; } >> "$GITHUB_OUTPUT"
 
+      # Puts the changelog in the plugin's own manifest, so it ends up inside the zip and Dalamud
+      # (and Will-o-Patchwisp) can show it after the update. Not committed: only the build uses it.
+      - name: Add the changelog to the plugin manifest
+        if: steps.v.outputs.skip != 'true'
+        shell: bash
+        env:
+          CHANGELOG: ${{ steps.v.outputs.changelog }}
+        run: |
+          jq --arg c "$CHANGELOG" '.Changelog = $c' "$PLUGIN.json" > manifest.tmp
+          mv manifest.tmp "$PLUGIN.json"
+
       - name: Set up .NET
         if: steps.v.outputs.skip != 'true'
         uses: actions/setup-dotnet@v4
@@ -93,6 +104,7 @@ jobs:
         run: |
           # DalamudPackager already made a ready-to-install zip (dll, manifest, images, fonts...)
           Copy-Item "bin\Release\$env:PLUGIN\latest.zip" "$env:PLUGIN.zip"
+          git checkout -- "$env:PLUGIN.json"
 
       - name: Create GitHub release
         if: steps.v.outputs.skip != 'true'
@@ -122,19 +134,3 @@ jobs:
           git add repo.json
           git commit -m "Update repo.json to $VERSION" || echo "Nothing to commit"
           git push origin "$BRANCH"
-
-      # Refreshes the combined Will-o plugin list right away, instead of waiting for its schedule
-      # (which GitHub often runs hours late). Needs a PLUGIN_LIST_TOKEN secret in this repo: a fine-grained
-      # token with access to NeonGhostCinnamon/WillOPlugins and "Actions: Read and write" permission.
-      - name: Refresh the Will-o plugin list
-        if: steps.v.outputs.skip != 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.PLUGIN_LIST_TOKEN }}
-        run: |
-          if [ -z "$GH_TOKEN" ]; then
-            echo "::notice::No PLUGIN_LIST_TOKEN secret, so the plugin list will pick this release up on its own schedule."
-            exit 0
-          fi
-          gh workflow run update.yml -R NeonGhostCinnamon/WillOPlugins \
-            || echo "::warning::Could not start the plugin list update. Check that PLUGIN_LIST_TOKEN is valid."
