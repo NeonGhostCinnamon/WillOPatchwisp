@@ -20,6 +20,9 @@ public sealed record AvailableUpdate(
     string? RepoUrl,
     bool IsTesting);
 
+/// <summary>What a plugin's repository listing says about it: its repository link and the newest changelogs.</summary>
+public sealed record RemoteInfo(string? RepoUrl, string? Version, string? Changelog, string? TestingVersion, string? TestingChangelog, string? ListUrl);
+
 /// <summary>
 /// Downloads the plugin lists (pluginmaster JSON) of every repository your plugins were installed from
 /// and compares them with what is installed.
@@ -40,6 +43,24 @@ public sealed class RepoChecker : IDisposable
 
     public IReadOnlyList<AvailableUpdate> Updates { get; private set; } = Array.Empty<AvailableUpdate>();
     public IReadOnlyList<string> Errors { get; private set; } = Array.Empty<string>();
+
+    /// <summary>
+    /// Per installed plugin (InternalName): what its repository listing says, from the last check. Used when the
+    /// installed plugin itself has no changelog or repository link.
+    /// </summary>
+    public IReadOnlyDictionary<string, RemoteInfo> Known { get; private set; } = new Dictionary<string, RemoteInfo>();
+
+    /// <summary>The changelog the repository listing has for exactly this version, if any.</summary>
+    public string? ChangelogFor(string internalName, string version)
+    {
+        if (!Known.TryGetValue(internalName, out var k))
+            return null;
+        var text = Same(k.Version, version) ? k.Changelog : Same(k.TestingVersion, version) ? k.TestingChangelog : null;
+        return string.IsNullOrWhiteSpace(text) ? null : text.Trim();
+    }
+
+    private static bool Same(string? a, string b)
+        => a != null && Version.TryParse(a, out var x) && Version.TryParse(b, out var y) ? x == y : a == b;
     public DateTime? LastChecked { get; private set; }
     public bool IsRunning => running == 1;
 
@@ -98,6 +119,8 @@ public sealed class RepoChecker : IDisposable
     {
         var updates = new List<AvailableUpdate>();
         var errors = new List<string>();
+        // Keep what earlier checks found for repositories that can't be reached right now.
+        var known = new Dictionary<string, RemoteInfo>(Known);
 
         var byRepo = installed
             .Where(p => !string.IsNullOrEmpty(p.Source) && p.Source != "DEVPLUGIN")
@@ -137,7 +160,14 @@ public sealed class RepoChecker : IDisposable
             foreach (var p in group)
             {
                 if (!lookup.TryGetValue(p.InternalName, out var r))
+                {
+                    known[p.InternalName] = new RemoteInfo(string.IsNullOrWhiteSpace(p.RepoUrl) ? null : p.RepoUrl, null, null, null, null, group.Key);
                     continue;
+                }
+
+                known[p.InternalName] = new RemoteInfo(
+                    string.IsNullOrWhiteSpace(p.RepoUrl) ? (string.IsNullOrWhiteSpace(r.RepoUrl) ? null : r.RepoUrl) : p.RepoUrl,
+                    r.AssemblyVersion, r.Changelog, r.TestingAssemblyVersion, r.TestingChangelog, group.Key);
 
                 // Stable channel
                 var candidate = Parse(r.AssemblyVersion);
@@ -175,6 +205,7 @@ public sealed class RepoChecker : IDisposable
 
         Updates = updates.OrderBy(u => u.Name, StringComparer.OrdinalIgnoreCase).ToList();
         Errors = errors;
+        Known = known;
     }
 
     private static Version? Parse(string? v) => Version.TryParse(v, out var parsed) ? parsed : null;

@@ -889,26 +889,23 @@ public class UpdatesWindow : Window
         if (!open)
             return;
 
+        // The plugin itself may have shipped without a changelog or repository link: the repository listing often has them.
+        var changelog = e.Changelog ?? plugin.Repos.ChangelogFor(e.InternalName, e.NewVersion);
+        var repoUrl = RepoFor(e.InternalName, e.RepoUrl);
+
         // Changelog, indented under the name with a thin accent line on its left.
         var indent = S(44);
         var noteTop = ImGui.GetCursorScreenPos();
         ImGui.Indent(indent);
         using (ImRaii.TextWrapPos(ImGui.GetCursorPosX() + (right - left - indent)))
         {
-            if (e.Changelog != null)
-                Theme.Wrapped(e.Changelog, Theme.TextSoft);
+            if (changelog != null)
+                Theme.Wrapped(changelog, Theme.TextSoft);
             else
-                DrawGitHubFallback(e.RepoUrl, e.NewVersion);
+                DrawGitHubFallback(repoUrl, e.NewVersion);
 
             ImGuiHelpers.ScaledDummy(1f);
-            if (e.RepoUrl != null)
-            {
-                if (Theme.SmallButton($"Open repository##{key}"))
-                    Util.OpenLink(e.RepoUrl);
-                if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip(e.RepoUrl);
-                ImGui.SameLine();
-            }
+            DrawSourceButtons(key, e.InternalName, repoUrl, changelog == null);
 
             var ignored = plugin.IsIgnored(e.InternalName);
             if (Theme.SmallButton($"{(ignored ? "Stop ignoring" : "Ignore")}##{key}"))
@@ -1148,6 +1145,10 @@ public class UpdatesWindow : Window
     {
         var open = expanded.TryGetValue(id, out var o) ? o : defaultOpen;
 
+        repoUrl = RepoFor(internalName, repoUrl);
+        if (changelog == null && internalName != null && version != null)
+            changelog = plugin.Repos.ChangelogFor(internalName, version);
+
         // "See older updates" jumped here: scroll this card into view.
         if (jumpToCard == id)
         {
@@ -1260,31 +1261,21 @@ public class UpdatesWindow : Window
                         OpenUpdater(up.Name);
                 }
 
-                if (repoUrl != null)
-                    ImGui.SameLine();
+                ImGui.SameLine();
 
                 if (state?.Kind is UpdateStateKind.Failed or UpdateStateKind.NotFound && state.Message != null)
                 {
-                    if (repoUrl != null)
-                        ImGui.NewLine();
+                    ImGui.NewLine();
                     Theme.Wrapped(state.Message, Theme.Amber);
                 }
             }
 
-            if (repoUrl != null)
-            {
-                if (Theme.SmallButton("Open repository"))
-                    Util.OpenLink(repoUrl);
-                if (ImGui.IsItemHovered())
-                    ImGui.SetTooltip(repoUrl);
-            }
+            if (update == null)
+                ImGuiHelpers.ScaledDummy(2f);
+            DrawSourceButtons(id, internalName, repoUrl, changelog == null);
 
             if (internalName != null)
             {
-                if (repoUrl != null || update != null)
-                    ImGui.SameLine();
-                else
-                    ImGuiHelpers.ScaledDummy(2f);
 
                 var ignored = plugin.IsIgnored(internalName);
                 if (Theme.SmallButton(ignored ? "Stop ignoring" : "Ignore"))
@@ -1515,6 +1506,73 @@ public class UpdatesWindow : Window
         return clicked;
     }
 
+    /// <summary>The plugin's repository link: its own, or the one its repository listing gives.</summary>
+    private string? RepoFor(string? internalName, string? repoUrl)
+    {
+        if (!string.IsNullOrWhiteSpace(repoUrl))
+            return repoUrl;
+        return internalName != null && plugin.Repos.Known.TryGetValue(internalName, out var k) ? k.RepoUrl : null;
+    }
+
+    /// <summary>
+    /// "Open repository", and "Open on GitHub" (its releases) when there's no changelog. When the plugin doesn't say
+    /// where its code lives: a button to the plugin list it was installed from (e.g. "Open puni.sh").
+    /// Ends with SameLine so more buttons can follow.
+    /// </summary>
+    private void DrawSourceButtons(string key, string? internalName, string? repoUrl, bool noChangelog)
+    {
+        if (repoUrl != null)
+        {
+            if (Theme.SmallButton($"Open repository##repo{key}"))
+                Util.OpenLink(repoUrl);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(repoUrl);
+            ImGui.SameLine();
+
+            if (noChangelog && GitHubChangelogs.ParseRepo(repoUrl) is { } gh)
+            {
+                var releases = $"https://github.com/{gh.Owner}/{gh.Repo}/releases";
+                if (Theme.SmallButton($"Open on GitHub##gh{key}"))
+                    Util.OpenLink(releases);
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip(releases);
+                ImGui.SameLine();
+            }
+            return;
+        }
+
+        if (internalName != null && plugin.Repos.Known.TryGetValue(internalName, out var k) && ListSite(k.ListUrl) is { } site)
+        {
+            if (Theme.SmallButton($"{site.Label}##list{key}"))
+                Util.OpenLink(site.Url);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip($"This plugin doesn't say where its code lives.\nOpens the plugin list it was installed from:\n{k.ListUrl}");
+            ImGui.SameLine();
+        }
+    }
+
+    /// <summary>
+    /// A page to open for a plugin list: the GitHub repository it lives in, or the website it's hosted on
+    /// (e.g. https://puni.sh/api/repository/veyn -> "Open puni.sh", https://puni.sh).
+    /// </summary>
+    private static (string Label, string Url)? ListSite(string? listUrl)
+    {
+        if (string.IsNullOrWhiteSpace(listUrl) || !Uri.TryCreate(listUrl, UriKind.Absolute, out var uri))
+            return null;
+        if (uri.Host.Equals("kamori.goats.dev", StringComparison.OrdinalIgnoreCase))
+            return null; // Dalamud's main list: no page of its own to show
+
+        var parts = uri.AbsolutePath.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if ((uri.Host.Equals("raw.githubusercontent.com", StringComparison.OrdinalIgnoreCase)
+             || uri.Host.Equals("github.com", StringComparison.OrdinalIgnoreCase)) && parts.Length >= 2)
+            return ("Open plugin list on GitHub", $"https://github.com/{parts[0]}/{parts[1]}");
+        if (uri.Host.EndsWith(".github.io", StringComparison.OrdinalIgnoreCase) && parts.Length >= 1)
+            return ("Open plugin list on GitHub", $"https://github.com/{uri.Host[..^".github.io".Length]}/{parts[0]}");
+
+        var host = uri.Host.StartsWith("www.", StringComparison.OrdinalIgnoreCase) ? uri.Host[4..] : uri.Host;
+        return ($"Open {host}", $"{uri.Scheme}://{uri.Host}/");
+    }
+
     /// <summary>No changelog in the manifest: try the plugin's GitHub releases / commits instead.</summary>
     private void DrawGitHubFallback(string? repoUrl, string? version)
     {
@@ -1539,13 +1597,6 @@ public class UpdatesWindow : Window
                 ImGui.SetCursorPosY(pillTop + Theme.PillTextOffset("GitHub"));
                 Theme.Wrapped(result.Source ?? "From GitHub", Theme.Muted);
                 Theme.Wrapped(result.Text ?? string.Empty, Theme.TextSoft);
-                if (result.Url != null)
-                {
-                    if (Theme.SmallButton("Open on GitHub"))
-                        Util.OpenLink(result.Url);
-                    if (ImGui.IsItemHovered())
-                        ImGui.SetTooltip(result.Url);
-                }
                 break;
 
             case GitHubLookupStatus.Failed:
