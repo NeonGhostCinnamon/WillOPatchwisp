@@ -1834,10 +1834,9 @@ public class UpdatesWindow : Window
         var n = 0;
         using var id = ImRaii.PushId(text.GetHashCode());
 
-        foreach (var raw in text.Replace("\r", string.Empty).Split('\n'))
+        foreach (var parsed in ParseChangelog(text))
         {
-            var line = raw.TrimEnd();
-            if (line.Trim().Length == 0)
+            if (parsed == null)
             {
                 // Several empty lines in a row: one small gap.
                 if (!blank && n > 0)
@@ -1846,42 +1845,9 @@ public class UpdatesWindow : Window
                 continue;
             }
             blank = false;
-
-            var heading = System.Text.RegularExpressions.Regex.IsMatch(line, @"^\s*#{1,6}\s");
-            line = System.Text.RegularExpressions.Regex.Replace(line, @"^\s*#{1,6}\s*", string.Empty);
-            line = System.Text.RegularExpressions.Regex.Replace(line, @"^(\s*)[*+]\s+", "$1- ");
-            line = line.Replace("**", string.Empty).Replace("__", string.Empty).Replace("`", string.Empty);
-
-            // Pieces: plain words and links.
-            var pieces = new List<(string Text, string? Url)>();
-            var pos = 0;
-            while (pos < line.Length)
-            {
-                var md = MdLink.Match(line, pos);
-                var bare = BareUrl.Match(line, pos);
-                System.Text.RegularExpressions.Match? next = md.Success && (!bare.Success || md.Index <= bare.Index) ? md : bare.Success ? bare : null;
-                if (next == null)
-                {
-                    AddWords(pieces, line[pos..]);
-                    break;
-                }
-                AddWords(pieces, line[pos..next.Index]);
-                if (next == md)
-                {
-                    pieces.Add((md.Groups[1].Value, md.Groups[2].Value));
-                }
-                else
-                {
-                    var url = bare.Value.TrimEnd('.', ',', ';', ':', '!', '?', '\'', '"');
-                    pieces.Add((ShortLink(url), url));
-                    if (url.Length < bare.Value.Length)
-                        AddWords(pieces, bare.Value[url.Length..]);
-                }
-                pos = next.Index + next.Length;
-            }
-
+            var (heading, bullet, pieces) = parsed;
             var x = left;
-            var indent = line.StartsWith("- ") ? ImGui.CalcTextSize("- ").X : 0f;
+            var indent = bullet ? ImGui.CalcTextSize("- ").X : 0f;
             foreach (var (piece, url) in pieces)
             {
                 var label = piece;
@@ -1931,6 +1897,66 @@ public class UpdatesWindow : Window
         // Reserve the space that was drawn on.
         ImGui.SetCursorScreenPos(new Vector2(left, startY));
         ImGui.Dummy(new Vector2(right - left, Math.Max(lineH, y - startY - spacing * 0.5f)));
+    }
+
+    private sealed record ChangelogLine(bool Heading, bool Bullet, List<(string Text, string? Url)> Pieces);
+
+    // Changelogs already split into words and links (null = an empty line), so that isn't redone every frame.
+    private static readonly Dictionary<string, List<ChangelogLine?>> ParsedChangelogs = new();
+
+    private static List<ChangelogLine?> ParseChangelog(string text)
+    {
+        if (ParsedChangelogs.TryGetValue(text, out var cached))
+            return cached;
+        if (ParsedChangelogs.Count > 200)
+            ParsedChangelogs.Clear();
+
+        var result = new List<ChangelogLine?>();
+        foreach (var raw in text.Replace("\r", string.Empty).Split('\n'))
+        {
+            var line = raw.TrimEnd();
+            if (line.Trim().Length == 0)
+            {
+                result.Add(null);
+                continue;
+            }
+
+            var heading = System.Text.RegularExpressions.Regex.IsMatch(line, @"^\s*#{1,6}\s");
+            line = System.Text.RegularExpressions.Regex.Replace(line, @"^\s*#{1,6}\s*", string.Empty);
+            line = System.Text.RegularExpressions.Regex.Replace(line, @"^(\s*)[*+]\s+", "$1- ");
+            line = line.Replace("**", string.Empty).Replace("__", string.Empty).Replace("`", string.Empty);
+
+            // Pieces: plain words and links.
+            var pieces = new List<(string Text, string? Url)>();
+            var pos = 0;
+            while (pos < line.Length)
+            {
+                var md = MdLink.Match(line, pos);
+                var bare = BareUrl.Match(line, pos);
+                System.Text.RegularExpressions.Match? next = md.Success && (!bare.Success || md.Index <= bare.Index) ? md : bare.Success ? bare : null;
+                if (next == null)
+                {
+                    AddWords(pieces, line[pos..]);
+                    break;
+                }
+                AddWords(pieces, line[pos..next.Index]);
+                if (next == md)
+                {
+                    pieces.Add((md.Groups[1].Value, md.Groups[2].Value));
+                }
+                else
+                {
+                    var url = bare.Value.TrimEnd('.', ',', ';', ':', '!', '?', '\'', '"');
+                    pieces.Add((ShortLink(url), url));
+                    if (url.Length < bare.Value.Length)
+                        AddWords(pieces, bare.Value[url.Length..]);
+                }
+                pos = next.Index + next.Length;
+            }
+            result.Add(new ChangelogLine(heading, line.StartsWith("- "), pieces));
+        }
+        ParsedChangelogs[text] = result;
+        return result;
     }
 
     private static void AddWords(List<(string, string?)> pieces, string text)
