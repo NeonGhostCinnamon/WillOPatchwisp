@@ -297,6 +297,101 @@ internal static class Theme
         return clicked;
     }
 
+    /// <summary>Soft pink → purple colour that slowly cycles, like Will-o-Bars' active cards.</summary>
+    public static Vector4 Glow(float offset = 0f)
+    {
+        var t = (MathF.Sin((float)ImGui.GetTime() * 1.6f + offset) + 1f) / 2f;
+        return Vector4.Lerp(Rgb(255, 126, 182), Rgb(176, 128, 255), t);
+    }
+
+    public enum CheckLook
+    {
+        /// <summary>Pink, ready to click.</summary>
+        Normal,
+        /// <summary>Faded pink with a spinning circle; can't be clicked.</summary>
+        Busy,
+        /// <summary>Grey: the check found nothing.</summary>
+        Nothing,
+        /// <summary>Pink with an animated pink/purple border: the check found updates.</summary>
+        Found,
+    }
+
+    /// <summary>Width of a <see cref="CheckButton"/> with this label (and an icon or spinner in front of it).</summary>
+    public static float CheckButtonWidth(string label, bool withIcon)
+        => ImGui.CalcTextSize(label).X + ImGui.GetStyle().FramePadding.X * 2 + (withIcon ? ImGui.GetFontSize() + S(6) : 0);
+
+    /// <summary>The "Check for updates" button in its four looks.</summary>
+    public static bool CheckButton(string id, string label, CheckLook look, FontAwesomeIcon? icon = null)
+    {
+        var busy = look == CheckLook.Busy;
+        var withIcon = busy || icon != null;
+        var size = new Vector2(CheckButtonWidth(label, withIcon), ImGui.GetFrameHeight());
+        var pos = ImGui.GetCursorScreenPos();
+
+        using var disabled = ImRaii.Disabled(busy);
+        var clicked = ImGui.InvisibleButton(id, size) && !busy;
+        var hovered = !busy && ImGui.IsItemHovered();
+        var active = !busy && ImGui.IsItemActive();
+
+        var dl = ImGui.GetWindowDrawList();
+        var round = ImGui.GetStyle().FrameRounding;
+        uint fill, text;
+        if (look == CheckLook.Nothing)
+        {
+            fill = ImGui.GetColorU32(active ? GlassHover with { W = GlassHover.W + 0.06f } : hovered ? GlassHover : Field);
+            text = ImGui.GetColorU32(Text);
+        }
+        else
+        {
+            fill = ImGui.GetColorU32(active ? ImGuiCol.ButtonActive : hovered ? ImGuiCol.ButtonHovered : ImGuiCol.Button);
+            text = ImGui.GetColorU32(OnPink);
+        }
+        dl.AddRectFilled(pos, pos + size, fill, round);
+
+        if (look == CheckLook.Nothing)
+        {
+            dl.AddRect(pos, pos + size, ImGui.GetColorU32(hovered ? Text : Border), round, ImDrawFlags.None, S(1.2f));
+        }
+        else if (look == CheckLook.Found)
+        {
+            // Same animated border as Will-o-Bars' active cards: a faint wide halo plus a crisp line.
+            var c = Glow();
+            dl.AddRect(pos - new Vector2(S(1.5f)), pos + size + new Vector2(S(1.5f)), ImGui.GetColorU32(c with { W = 0.35f }), round + S(1.5f), ImDrawFlags.None, S(3f));
+            dl.AddRect(pos, pos + size, ImGui.GetColorU32(c), round, ImDrawFlags.None, S(1.8f));
+        }
+
+        var x = pos.X + ImGui.GetStyle().FramePadding.X;
+        var cy = pos.Y + size.Y / 2f;
+        var slot = ImGui.GetFontSize();
+        if (busy)
+        {
+            // Spinning circle: a faint ring with a bright arc going round.
+            var center = new Vector2(x + slot / 2f, cy);
+            var r = slot * 0.38f;
+            dl.AddCircle(center, r, ImGui.GetColorU32(OnPink with { W = OnPink.W * 0.3f }), 24, S(2f));
+            var a = (float)ImGui.GetTime() * 6f;
+            dl.PathArcTo(center, r, a, a + MathF.PI * 1.3f, 24);
+            dl.PathStroke(text, ImDrawFlags.None, S(2f));
+        }
+        else if (icon is { } ic)
+        {
+            using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+            {
+                var s = ic.ToIconString();
+                var ink = InkBounds(s);
+                var inkCenter = new Vector2((ink.X + ink.Z) / 2f, (ink.Y + ink.W) / 2f);
+                dl.AddText(new Vector2(x + slot / 2f, cy) - inkCenter, text, s);
+            }
+        }
+        if (withIcon)
+            x += slot + S(6);
+        dl.AddText(new Vector2(x, cy - ImGui.GetTextLineHeight() / 2f), text, label);
+
+        if (hovered)
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+        return clicked;
+    }
+
     public static bool SmallButton(string label)
     {
         ImGui.PushStyleColor(ImGuiCol.Text, OnPink);

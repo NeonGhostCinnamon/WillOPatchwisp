@@ -441,12 +441,31 @@ public class UpdatesWindow : Window
 
     // ---------------------------------------------------------------- toolbar / settings
 
+    // "Check for updates" pressed: show what it found on the button for a few seconds once it's done.
+    private bool manualCheck;
+    private DateTime checkResultUntil;
+    private int checkResultCount;
+
     private void DrawToolbar()
     {
         var style = ImGui.GetStyle();
-        var checkLabel = plugin.Repos.IsRunning ? "Checking..." : "Check for updates";
+
+        if (manualCheck && !plugin.Repos.IsRunning)
+        {
+            manualCheck = false;
+            checkResultCount = plugin.VisibleUpdates.Count;
+            checkResultUntil = DateTime.UtcNow.AddSeconds(4);
+        }
+
+        var (checkLabel, look, icon) = plugin.Repos.IsRunning
+            ? ("Checking...", Theme.CheckLook.Busy, (FontAwesomeIcon?)null)
+            : DateTime.UtcNow >= checkResultUntil
+                ? ("Check for updates", Theme.CheckLook.Normal, null)
+                : checkResultCount == 0
+                    ? ("No updates found", Theme.CheckLook.Nothing, FontAwesomeIcon.BoxOpen)
+                    : ($"{checkResultCount} update{(checkResultCount == 1 ? "" : "s")} found", Theme.CheckLook.Found, null);
         var settingsLabel = showSettings ? "Hide settings" : "Settings";
-        var checkW = ImGui.CalcTextSize(checkLabel).X + style.FramePadding.X * 2;
+        var checkW = Theme.CheckButtonWidth(checkLabel, look == Theme.CheckLook.Busy || icon != null);
         var settingsW = ImGui.CalcTextSize(settingsLabel).X + style.FramePadding.X * 2;
 
         var avail = ImGui.GetContentRegionAvail().X;
@@ -459,14 +478,13 @@ public class UpdatesWindow : Window
         if (oneRow)
             ImGui.SameLine();
 
-        using (ImRaii.Disabled(plugin.Repos.IsRunning))
+        if (Theme.CheckButton("##check", checkLabel, look, icon))
         {
-            if (Theme.Button(checkLabel))
-            {
-                plugin.Tracker.CheckNow();
-                plugin.Repos.StartCheck();
-                installedCache = null;
-            }
+            plugin.Tracker.CheckNow();
+            plugin.Repos.StartCheck();
+            installedCache = null;
+            manualCheck = true;
+            checkResultUntil = default;
         }
 
         ImGui.SameLine();
