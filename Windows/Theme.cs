@@ -392,10 +392,16 @@ internal static class Theme
         return clicked;
     }
 
+    /// <summary>
+    /// Small pill button. Not ImGui's own SmallButton: that has no room above and below the text, so letters
+    /// like "p" and "y" touched the rounded border.
+    /// </summary>
     public static bool SmallButton(string label)
     {
         ImGui.PushStyleColor(ImGuiCol.Text, OnPink);
-        var clicked = ImGui.SmallButton(label);
+        ImGui.PushStyleVar(ImGuiStyleVar.FramePadding, new Vector2(S(9), S(2)));
+        var clicked = ImGui.Button(label);
+        ImGui.PopStyleVar();
         ImGui.PopStyleColor();
         return clicked;
     }
