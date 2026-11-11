@@ -26,6 +26,7 @@ public sealed class Plugin : IDalamudPlugin
     [PluginService] internal static IDataManager Data { get; private set; } = null!;
 
     private ushort? pinkChatColor;
+    private bool recheckAfterUpdates;
 
     private const string Command = "/patchwisp";
 
@@ -88,10 +89,22 @@ public sealed class Plugin : IDalamudPlugin
 
         if (Configuration.CheckReposOnStartup)
             Repos.StartCheck();
+
+        Framework.Update += OnFrameworkUpdate;
+    }
+
+    private void OnFrameworkUpdate(IFramework framework)
+    {
+        if (recheckAfterUpdates && !Updater.IsBusy)
+        {
+            recheckAfterUpdates = false;
+            Repos.StartCheck();
+        }
     }
 
     public void Dispose()
     {
+        Framework.Update -= OnFrameworkUpdate;
         Tracker.UpdatesDetected -= OnUpdatesDetected;
         Tracker.Dispose();
         Repos.Dispose();
@@ -204,9 +217,15 @@ public sealed class Plugin : IDalamudPlugin
 
     private void OnUpdatesDetected(IReadOnlyList<UpdateEntry> updates)
     {
-        // Installed versions changed, so refresh the "available" list too.
+        // Installed versions changed, so refresh the "available" list too. While Will-o-Patchwisp is still
+        // updating plugins, wait for the last one: a check started mid-way would list the rest as available again.
         if (Configuration.CheckReposOnStartup)
-            Repos.StartCheck();
+        {
+            if (Updater.IsBusy)
+                recheckAfterUpdates = true;
+            else
+                Repos.StartCheck();
+        }
 
         if (Configuration.PrintToChat)
             PrintUpdates(updates);
