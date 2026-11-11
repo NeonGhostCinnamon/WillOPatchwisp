@@ -35,6 +35,8 @@ public sealed class DirectUpdater
     private readonly PropertyInfo? updatablePlugins;
     private readonly MethodInfo? updateSingle;
     private readonly MethodInfo? detectUpdates;
+    private readonly MethodInfo? reloadRepos;
+    private DateTime lastReload = DateTime.MinValue;
     private readonly PropertyInfo? installedPluginProp;
     private readonly PropertyInfo? internalNameProp;
     private readonly SemaphoreSlim gate = new(1, 1);
@@ -64,6 +66,7 @@ public sealed class DirectUpdater
             updatablePlugins = pmType.GetProperty("UpdatablePlugins", inst);
             updateSingle = pmType.GetMethod("UpdateSinglePluginAsync", inst);
             detectUpdates = pmType.GetMethod("DetectAvailablePluginUpdates", inst);
+            reloadRepos = pmType.GetMethod("ReloadAllReposAsync", inst, Type.EmptyTypes);
 
             var updType = asm.GetType("Dalamud.Plugin.Internal.Types.AvailablePluginUpdate", true)!;
             installedPluginProp = updType.GetProperty("InstalledPlugin", inst);
@@ -127,9 +130,17 @@ public sealed class DirectUpdater
     private async Task<UpdateState> UpdateOneAsync(string internalName)
     {
         var update = FindUpdate(internalName);
+        if (update == null && reloadRepos != null && DateTime.UtcNow - lastReload > TimeSpan.FromMinutes(1))
+        {
+            // Our repo check usually spots an update before Dalamud does: Dalamud only knows the plugin lists it
+            // downloaded earlier. Have it download them again (once per minute at most, so "Update all" doesn't
+            // re-download them for every plugin), which also refreshes its list of available updates.
+            lastReload = DateTime.UtcNow;
+            await ((Task)reloadRepos.Invoke(pluginManager, null)!).ConfigureAwait(false);
+            update = FindUpdate(internalName);
+        }
         if (update == null && detectUpdates != null)
         {
-            // Our repo check may have spotted the update before Dalamud did: ask Dalamud to look again.
             detectUpdates.Invoke(pluginManager, null);
             update = FindUpdate(internalName);
         }
