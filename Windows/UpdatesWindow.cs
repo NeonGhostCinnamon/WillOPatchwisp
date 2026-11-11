@@ -531,6 +531,8 @@ public class UpdatesWindow : Window
     }
 
     private string ignoreFilter = string.Empty;
+    private Dictionary<string, string>? ignoreNames;
+    private DateTime ignoreNamesAt;
 
     /// <summary>Settings section to add plugins to, or remove them from, the ignore list.</summary>
     private void DrawIgnoreList()
@@ -539,10 +541,16 @@ public class UpdatesWindow : Window
         ImGui.TextColored(Theme.Text, "Ignored plugins");
         Theme.Wrapped("No update alerts for these, and they're left out of \"Available\" and \"Update all\".", Theme.Muted);
 
-        var names = Plugin.PluginInterface.InstalledPlugins
-            .Where(p => !p.IsDev)
-            .GroupBy(p => p.InternalName)
-            .ToDictionary(g => g.Key, g => g.First().Name);
+        // The installed plugins, looked up every few seconds instead of every frame.
+        if (ignoreNames == null || DateTime.UtcNow - ignoreNamesAt > TimeSpan.FromSeconds(10))
+        {
+            ignoreNames = Plugin.PluginInterface.InstalledPlugins
+                .Where(p => !p.IsDev)
+                .GroupBy(p => p.InternalName)
+                .ToDictionary(g => g.Key, g => g.First().Name);
+            ignoreNamesAt = DateTime.UtcNow;
+        }
+        var names = ignoreNames;
 
         if (config.IgnoredPlugins.Count == 0)
         {
