@@ -1573,6 +1573,27 @@ public class UpdatesWindow : Window
         return ($"Open {host}", $"{uri.Scheme}://{uri.Host}/");
     }
 
+    /// <summary>Grey text that wraps word by word, with every "GitHub" in pink.</summary>
+    private static void SourceLine(string text)
+    {
+        var startX = ImGui.GetCursorScreenPos().X;
+        var maxX = ImGui.GetWindowPos().X + ImGui.GetWindowContentRegionMax().X;
+        var first = true;
+        foreach (System.Text.RegularExpressions.Match m in System.Text.RegularExpressions.Regex.Matches(text, @"GitHub|[^\sG]+\s*|G\s*|\s+"))
+        {
+            var piece = m.Value;
+            if (!first)
+            {
+                if (ImGui.GetItemRectMax().X + ImGui.CalcTextSize(piece.TrimEnd()).X <= maxX)
+                    ImGui.SameLine(0, 0);
+                else
+                    ImGui.SetCursorScreenPos(new Vector2(startX, ImGui.GetCursorScreenPos().Y));
+            }
+            ImGui.TextColored(piece == "GitHub" ? Theme.AccentText : Theme.Muted, piece);
+            first = false;
+        }
+    }
+
     /// <summary>No changelog in the manifest: try the plugin's GitHub releases / commits instead.</summary>
     private void DrawGitHubFallback(string? repoUrl, string? version)
     {
@@ -1590,12 +1611,8 @@ public class UpdatesWindow : Window
                 break;
 
             case GitHubLookupStatus.Found:
-                // Text next to the pill sits on the same line as the pill's own letters.
-                var pillTop = ImGui.GetCursorPosY();
-                Theme.Pill("GitHub", Theme.Pink);
-                ImGui.SameLine();
-                ImGui.SetCursorPosY(pillTop + Theme.PillTextOffset("GitHub"));
-                Theme.Wrapped(result.Source ?? "From GitHub", Theme.Muted);
+                // Where it came from, with the word "GitHub" in the accent colour.
+                SourceLine(result.Source ?? "From GitHub");
                 Theme.Wrapped(result.Text ?? string.Empty, Theme.TextSoft);
                 break;
 
