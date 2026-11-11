@@ -612,12 +612,17 @@ internal static class Theme
 
         var right = rightEdge ?? ImGui.GetWindowPos().X + ImGui.GetWindowContentRegionMax().X;
         var first = true;
-        foreach (var (piece, col, glue) in pieces)
+        for (var n = 0; n < pieces.Count; n++)
         {
+            var (piece, col, glue) = pieces[n];
             if (!first)
             {
+                // A piece and everything glued after it (the whole name) must fit, or it all moves to the next line.
+                var together = piece;
+                for (var m = n + 1; m < pieces.Count && pieces[m].Glue; m++)
+                    together += pieces[m].Text;
                 var x = ImGui.GetItemRectMax().X;
-                if (glue || x + ImGui.CalcTextSize(piece.TrimEnd()).X <= right)
+                if (glue || x + ImGui.CalcTextSize(together.TrimEnd()).X <= right)
                     ImGui.SameLine(0, 0);
             }
 
