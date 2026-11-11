@@ -433,19 +433,32 @@ public class UpdatesWindow : Window
     /// <summary>Updates everything directly, or opens the installer if direct updating isn't available.</summary>
     private void UpdateAll()
     {
-        if (plugin.Updater.IsAvailable)
-            plugin.Updater.UpdateMany(plugin.VisibleUpdates.Select(u => u.InternalName).ToList());
-        else
+        if (!plugin.Updater.IsAvailable)
+        {
             OpenUpdater();
+            return;
+        }
+        var names = plugin.VisibleUpdates.Select(u => u.InternalName).Where(n => n != DirectUpdater.SelfName).ToList();
+        if (names.Count > 0)
+            plugin.Updater.UpdateMany(names);
+        else
+            OpenUpdater(SelfDisplayName);
     }
 
     private void UpdateOne(string internalName, string name)
     {
-        if (plugin.Updater.IsAvailable)
-            plugin.Updater.Update(internalName);
-        else
+        // Will-o-Patchwisp can't update itself safely: send the player to Dalamud's installer for it.
+        if (internalName == DirectUpdater.SelfName || !plugin.Updater.IsAvailable)
             OpenUpdater(name);
+        else
+            plugin.Updater.Update(internalName);
     }
+
+    private const string SelfDisplayName = "Will-o-Patchwisp";
+    private const string SelfUpdateNote =
+        "Will-o-Patchwisp can't update itself: Dalamud has to unload it while it's still running the update, which can crash the game. Update it through Dalamud's plugin installer instead.";
+
+    private bool SelfUpdateWaiting => plugin.VisibleUpdates.Any(u => u.InternalName == DirectUpdater.SelfName);
 
     // ---------------------------------------------------------------- toolbar / settings
 
@@ -469,7 +482,7 @@ public class UpdatesWindow : Window
             {
                 found = plugin.VisibleUpdates;
                 foundAt = DateTime.Now;
-                picked = found.Select(u => u.InternalName).ToHashSet();
+                picked = found.Select(u => u.InternalName).Where(n => n != DirectUpdater.SelfName).ToHashSet();
                 batch = null;
                 closeFoundAt = null;
             }
@@ -585,7 +598,7 @@ public class UpdatesWindow : Window
                 var allW = ImGui.CalcTextSize("All").X + S(10) + ImGui.CalcTextSize("None").X;
                 ImGui.SameLine(right - allW - ImGui.GetWindowPos().X + ImGui.GetScrollX());
                 if (Link("All##pickall", "All"))
-                    picked = found.Select(u => u.InternalName).ToHashSet();
+                    picked = found.Select(u => u.InternalName).Where(n => n != DirectUpdater.SelfName).ToHashSet();
                 ImGui.SameLine(0, S(10));
                 if (Link("None##picknone", "None"))
                     picked.Clear();
@@ -604,8 +617,12 @@ public class UpdatesWindow : Window
                         StartBatch(selected);
                 }
                 ImGui.SameLine();
-                if (Theme.Button($"Update all ({found.Count})"))
-                    StartBatch(found.Select(u => u.InternalName).ToList());
+                var allCount = found.Count(u => u.InternalName != DirectUpdater.SelfName);
+                using (ImRaii.Disabled(allCount == 0))
+                {
+                    if (Theme.Button($"Update all ({allCount})"))
+                        StartBatch(found.Select(u => u.InternalName).ToList());
+                }
                 if (ImGui.IsItemHovered() && !updater.IsAvailable)
                     ImGui.SetTooltip("Opens Dalamud's plugin installer on the updates page.");
                 ImGui.SameLine();
@@ -615,6 +632,9 @@ public class UpdatesWindow : Window
                 if (Link("Not now##notnow", notNow))
                     found = null;
             }
+
+            if (found != null && found.Any(u => u.InternalName == DirectUpdater.SelfName))
+                SelfUpdateWarning();
         });
 
         // Rotating border while it's updating.
@@ -630,6 +650,16 @@ public class UpdatesWindow : Window
         }
     }
 
+    /// <summary>Amber note: Will-o-Patchwisp has an update, but it has to be installed through Dalamud.</summary>
+    private void SelfUpdateWarning()
+    {
+        ImGuiHelpers.ScaledDummy(2f);
+        Theme.Wrapped("Will-o-Patchwisp has an update too, but it can't update itself without risking a crash. Update it through Dalamud's plugin installer.", Theme.Amber);
+        if (Link("Open Dalamud's installer##selfupdate", "Open Dalamud's installer"))
+            OpenUpdater(SelfDisplayName);
+        ImGuiHelpers.ScaledDummy(2f);
+    }
+
     private void StartBatch(List<string> names)
     {
         if (!plugin.Updater.IsAvailable)
@@ -637,8 +667,14 @@ public class UpdatesWindow : Window
             OpenUpdater();
             return;
         }
-        batch = names;
-        plugin.Updater.UpdateMany(names);
+        batch = names.Where(n => n != DirectUpdater.SelfName).ToList();
+        if (batch.Count == 0)
+        {
+            batch = null;
+            OpenUpdater(SelfDisplayName);
+            return;
+        }
+        plugin.Updater.UpdateMany(batch);
     }
 
     private void DrawFoundRow(AvailableUpdate u, float left, float right)
@@ -651,7 +687,15 @@ public class UpdatesWindow : Window
 
         using var id = ImRaii.PushId(u.InternalName);
         ImGui.AlignTextToFramePadding();
-        if (batch == null)
+        if (batch == null && u.InternalName == DirectUpdater.SelfName)
+        {
+            var off = false;
+            using (ImRaii.Disabled())
+                ImGui.Checkbox("##pick", ref off);
+            if (ImGui.IsItemHovered(ImGuiHoveredFlags.AllowWhenDisabled))
+                ImGui.SetTooltip(SelfUpdateNote);
+        }
+        else if (batch == null)
         {
             var on = picked.Contains(u.InternalName);
             if (ImGui.Checkbox("##pick", ref on))
@@ -1275,6 +1319,8 @@ public class UpdatesWindow : Window
         if (visible.Count > 0)
         {
             ImGuiHelpers.ScaledDummy(2f);
+            if (SelfUpdateWaiting)
+                SelfUpdateWarning();
             var busy = plugin.Updater.IsBusy;
             using (ImRaii.Disabled(busy))
             {
@@ -1483,6 +1529,12 @@ public class UpdatesWindow : Window
                     case UpdateStateKind.Updated:
                         ImGui.AlignTextToFramePadding();
                         ImGui.TextColored(Theme.Green, "Updated!");
+                        break;
+                    case var _ when up.InternalName == DirectUpdater.SelfName:
+                        if (Theme.SmallButton("Update in Dalamud"))
+                            OpenUpdater(up.Name);
+                        if (ImGui.IsItemHovered())
+                            ImGui.SetTooltip(SelfUpdateNote);
                         break;
                     default:
                         if (Theme.SmallButton(state?.Kind is UpdateStateKind.Failed or UpdateStateKind.NotFound ? "Try again" : "Update"))

@@ -85,9 +85,16 @@ public sealed class DirectUpdater
 
     public void Update(string internalName) => UpdateMany(new[] { internalName });
 
+    /// <summary>
+    /// Will-o-Patchwisp itself. It's never updated from here: Dalamud would unload it while it's still running the
+    /// update, which can crash the game. The player updates it through Dalamud's installer instead.
+    /// </summary>
+    public static string SelfName => Plugin.PluginInterface.InternalName;
+
     public void UpdateMany(IReadOnlyCollection<string> internalNames)
     {
         var todo = internalNames
+            .Where(n => n != SelfName)
             .Where(n => !States.TryGetValue(n, out var s) || s.Kind != UpdateStateKind.Updating)
             .ToList();
         if (todo.Count == 0)
