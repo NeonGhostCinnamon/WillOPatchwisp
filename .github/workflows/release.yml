@@ -126,8 +126,11 @@ jobs:
         run: |
           git fetch origin "$BRANCH"
           git checkout -B "$BRANCH" "origin/$BRANCH"
-          jq --arg v "$VERSION" --arg c "$CHANGELOG" --argjson t "$(date +%s)" \
-            '.[0].AssemblyVersion = $v | .[0].Changelog = $c | .[0].LastUpdate = $t' repo.json > repo.tmp
+          # Name, short description, description and tags come from the plugin's own manifest, so they never go stale.
+          jq --arg v "$VERSION" --arg c "$CHANGELOG" --argjson t "$(date +%s)" --slurpfile m "$PLUGIN.json" \
+            '.[0].AssemblyVersion = $v | .[0].Changelog = $c | .[0].LastUpdate = $t
+             | .[0].Name = $m[0].Name | .[0].Punchline = $m[0].Punchline
+             | .[0].Description = $m[0].Description | .[0].Tags = $m[0].Tags' repo.json > repo.tmp
           mv repo.tmp repo.json
           git config user.name "github-actions"
           git config user.email "github-actions@github.com"
