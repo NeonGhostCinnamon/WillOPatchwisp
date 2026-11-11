@@ -858,7 +858,7 @@ public class UpdatesWindow : Window
             Theme.Pill("NEW", Theme.Green with { W = 0.85f });
             ImGui.SameLine();
         }
-        Theme.Pill(toggleText, Theme.Pink);
+        Theme.Pill(toggleText, open ? HideGrey : Theme.Pink);
         var pillHovered = ImGui.IsItemHovered();
         ImGui.SetCursorScreenPos(new Vector2(left, Math.Max(after.Y, ImGui.GetItemRectMax().Y + style.ItemSpacing.Y)));
 
@@ -908,7 +908,7 @@ public class UpdatesWindow : Window
             DrawSourceButtons(key, e.InternalName, repoUrl, changelog == null);
 
             var ignored = plugin.IsIgnored(e.InternalName);
-            if (Theme.SmallButton($"{(ignored ? "Stop ignoring" : "Ignore")}##{key}"))
+            if (IgnoreButton($"{(ignored ? "Stop ignoring" : "Ignore")}##{key}", ignored))
                 plugin.SetIgnored(e.InternalName, !ignored);
             if (ImGui.IsItemHovered())
                 ImGui.SetTooltip(ignored
@@ -1203,7 +1203,7 @@ public class UpdatesWindow : Window
                 Theme.Pill(t.Text, t.Color with { W = 0.85f });
                 ImGui.SameLine();
             }
-            Theme.Pill(toggleText, Theme.Pink);
+            Theme.Pill(toggleText, open ? HideGrey : Theme.Pink);
 
             // Continue below the block. For a closed card, stop exactly at the text's bottom edge:
             // moving the cursor further (line spacing) would make ImGui count it as content and the card
@@ -1278,7 +1278,7 @@ public class UpdatesWindow : Window
             {
 
                 var ignored = plugin.IsIgnored(internalName);
-                if (Theme.SmallButton(ignored ? "Stop ignoring" : "Ignore"))
+                if (IgnoreButton(ignored ? "Stop ignoring" : "Ignore", ignored))
                     plugin.SetIgnored(internalName, !ignored);
                 if (ImGui.IsItemHovered())
                     ImGui.SetTooltip(ignored
@@ -1488,6 +1488,23 @@ public class UpdatesWindow : Window
         var parts = v.Split('.').ToList();
         while (parts.Count < 2) parts.Add("0");
         return string.Join('.', parts);
+    }
+
+    // "Hide" (an open card) is grey, so the pink "Show" stands out on closed ones.
+    private static readonly Vector4 HideGrey = new(0.55f, 0.55f, 0.62f, 1f);
+    private static readonly Vector4 IgnoreRed = new(0.90f, 0.42f, 0.42f, 1f);
+
+    /// <summary>"Ignore" in a soft red; "Stop ignoring" keeps the normal pink.</summary>
+    private static bool IgnoreButton(string label, bool ignored)
+    {
+        if (ignored || Theme.UseDalamud)
+            return Theme.SmallButton(label);
+        ImGui.PushStyleColor(ImGuiCol.Button, IgnoreRed);
+        ImGui.PushStyleColor(ImGuiCol.ButtonHovered, new Vector4(0.96f, 0.55f, 0.55f, 1f));
+        ImGui.PushStyleColor(ImGuiCol.ButtonActive, new Vector4(0.80f, 0.32f, 0.32f, 1f));
+        var clicked = Theme.SmallButton(label);
+        ImGui.PopStyleColor(3);
+        return clicked;
     }
 
     /// <summary>Pink underlined text that works like a link.</summary>
