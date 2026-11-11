@@ -596,7 +596,10 @@ public class UpdatesWindow : Window
             {
                 ImGui.TextColored(Theme.Muted, "Tick the ones to update.");
                 var allW = ImGui.CalcTextSize("All").X + S(10) + ImGui.CalcTextSize("None").X;
-                ImGui.SameLine(right - allW - ImGui.GetWindowPos().X + ImGui.GetScrollX());
+                // Screen position, like the other right-side links: SameLine(x) would count from the card's
+                // inner group and land past the edge.
+                ImGui.SameLine();
+                ImGui.SetCursorScreenPos(new Vector2(Math.Max(ImGui.GetCursorScreenPos().X, right - allW), ImGui.GetCursorScreenPos().Y));
                 if (Link("All##pickall", "All"))
                     picked = found.Select(u => u.InternalName).Where(n => n != DirectUpdater.SelfName).ToHashSet();
                 ImGui.SameLine(0, S(10));
@@ -1645,7 +1648,8 @@ public class UpdatesWindow : Window
         ImGui.TextColored(Theme.Muted, source);
         if (countText.Length > 0)
         {
-            ImGui.SameLine(right - ImGui.CalcTextSize(countText).X - ImGui.GetWindowPos().X + ImGui.GetScrollX());
+            ImGui.SameLine();
+            ImGui.SetCursorScreenPos(new Vector2(Math.Max(ImGui.GetCursorScreenPos().X, right - ImGui.CalcTextSize(countText).X), ImGui.GetCursorScreenPos().Y));
             ImGui.TextColored(Theme.Muted, countText);
         }
 
