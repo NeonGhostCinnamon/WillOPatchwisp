@@ -99,8 +99,15 @@ public sealed class UpdateTracker : IDisposable
             }
 
             // Keep versions of plugins that are temporarily missing (e.g. mid-update) instead of forgetting them.
+            var changed = found.Count > 0;
             foreach (var (name, version) in current)
-                config.KnownVersions[name] = version;
+            {
+                if (!config.KnownVersions.TryGetValue(name, out var known) || known != version)
+                {
+                    config.KnownVersions[name] = version;
+                    changed = true;
+                }
+            }
 
             if (found.Count > 0)
             {
@@ -109,7 +116,9 @@ public sealed class UpdateTracker : IDisposable
                     config.History.RemoveRange(config.MaxHistory, config.History.Count - config.MaxHistory);
             }
 
-            config.Save();
+            // Only write the settings file when something changed (it holds the whole history).
+            if (changed)
+                config.Save();
 
             if (found.Count > 0)
                 UpdatesDetected?.Invoke(found);
