@@ -152,8 +152,10 @@ public class UpdatesWindow : Window
         Theme.AccentBar();
         ImGuiHelpers.ScaledDummy(2f);
 
-        DrawUpdateBanner();
+        if (found == null)
+            DrawUpdateBanner();
         DrawToolbar();
+        DrawFoundCard();
         if (showSettings)
             DrawSettings();
 
@@ -176,7 +178,9 @@ public class UpdatesWindow : Window
                 }
 
                 var available = plugin.VisibleUpdates.Count;
-                using (var tab = ImRaii.TabItem(available > 0 ? $"Available ({available})###available" : "Available###available"))
+                var availableFlags = selectAvailableTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
+                selectAvailableTab = false;
+                using (var tab = ImRaii.TabItem(available > 0 ? $"Available ({available})###available" : "Available###available", availableFlags))
                 {
                     if (tab.Success)
                         DrawAvailableTab();
@@ -459,6 +463,16 @@ public class UpdatesWindow : Window
             manualCheck = false;
             checkResultCount = plugin.VisibleUpdates.Count;
             checkResultUntil = DateTime.UtcNow.AddSeconds(4);
+
+            // Found something: list it, so the player can pick what to update.
+            if (checkResultCount > 0 && !plugin.Updater.IsBusy)
+            {
+                found = plugin.VisibleUpdates;
+                foundAt = DateTime.Now;
+                picked = found.Select(u => u.InternalName).ToHashSet();
+                batch = null;
+                closeFoundAt = null;
+            }
         }
 
         var (checkLabel, look, icon) = plugin.Repos.IsRunning
@@ -494,6 +508,225 @@ public class UpdatesWindow : Window
         ImGui.SameLine();
         if (Theme.Button(settingsLabel))
             showSettings = !showSettings;
+    }
+
+    // ---------------------------------------------------------------- "N updates found" card
+
+    private List<AvailableUpdate>? found;
+    private DateTime foundAt;
+    private HashSet<string> picked = new();
+    private List<string>? batch;
+    private DateTime? closeFoundAt;
+
+    // Set by a "changelog" link: select the Available tab and jump to that plugin's card.
+    private bool selectAvailableTab;
+
+    /// <summary>
+    /// After "Check for updates" found something: every update with a tick box, "Update selected" and "Update all".
+    /// While updating it shows how far it got per plugin, and closes by itself a few seconds after it's done.
+    /// </summary>
+    private void DrawFoundCard()
+    {
+        if (found == null)
+            return;
+
+        var updater = plugin.Updater;
+        if (closeFoundAt is { } at && DateTime.UtcNow >= at)
+        {
+            found = null;
+            return;
+        }
+
+        var start = ImGui.GetCursorScreenPos();
+        var busy = batch != null && updater.IsBusy;
+        Theme.Card("found", () =>
+        {
+            var left = Theme.CardInnerLeft;
+            var right = Theme.CardInnerRight;
+
+            // Header
+            string title;
+            if (batch == null)
+                title = $"{found.Count} update{(found.Count == 1 ? "" : "s")} found";
+            else if (busy)
+                title = $"Updating {Math.Min(updater.BatchDone + 1, Math.Max(1, updater.BatchTotal))} of {updater.BatchTotal}...";
+            else
+                title = "Done";
+            using (plugin.TitleFont.Available ? plugin.TitleFont.Push() : null)
+            {
+                ImGui.SetWindowFontScale(0.55f);
+                ImGui.TextColored(Theme.Text, title);
+                ImGui.SetWindowFontScale(1f);
+            }
+            var headY = ImGui.GetItemRectMin().Y;
+            var headH = ImGui.GetItemRectSize().Y;
+            var close = "x";
+            var closeW = ImGui.CalcTextSize(close).X;
+            var checkedText = batch == null ? $"checked {foundAt:HH:mm}" : string.Empty;
+            var after = ImGui.GetCursorScreenPos();
+            var ty = headY + (headH - ImGui.GetTextLineHeight()) / 2f;
+            if (checkedText.Length > 0)
+                ImGui.GetWindowDrawList().AddText(new Vector2(right - closeW - S(10) - ImGui.CalcTextSize(checkedText).X, ty), ImGui.GetColorU32(Theme.Muted), checkedText);
+            if (!busy)
+            {
+                ImGui.SetCursorScreenPos(new Vector2(right - closeW, ty));
+                if (Link("x##closefound", close))
+                    found = null;
+                if (ImGui.IsItemHovered())
+                    ImGui.SetTooltip("Close");
+            }
+            ImGui.SetCursorScreenPos(after);
+            if (found == null)
+                return;
+
+            if (batch == null)
+            {
+                ImGui.TextColored(Theme.Muted, "Tick the ones to update.");
+                var allW = ImGui.CalcTextSize("All").X + S(10) + ImGui.CalcTextSize("None").X;
+                ImGui.SameLine(right - allW - ImGui.GetWindowPos().X + ImGui.GetScrollX());
+                if (Link("All##pickall", "All"))
+                    picked = found.Select(u => u.InternalName).ToHashSet();
+                ImGui.SameLine(0, S(10));
+                if (Link("None##picknone", "None"))
+                    picked.Clear();
+            }
+
+            foreach (var u in found)
+                DrawFoundRow(u, left, right);
+
+            if (batch == null)
+            {
+                ImGuiHelpers.ScaledDummy(3f);
+                var selected = found.Where(u => picked.Contains(u.InternalName)).Select(u => u.InternalName).ToList();
+                using (ImRaii.Disabled(selected.Count == 0))
+                {
+                    if (Theme.Button($"Update selected ({selected.Count})"))
+                        StartBatch(selected);
+                }
+                ImGui.SameLine();
+                if (Theme.Button($"Update all ({found.Count})"))
+                    StartBatch(found.Select(u => u.InternalName).ToList());
+                if (ImGui.IsItemHovered() && !updater.IsAvailable)
+                    ImGui.SetTooltip("Opens Dalamud's plugin installer on the updates page.");
+                ImGui.SameLine();
+                var notNow = "Not now";
+                ImGui.SetCursorScreenPos(new Vector2(Math.Max(ImGui.GetCursorScreenPos().X, right - ImGui.CalcTextSize(notNow).X), ImGui.GetCursorScreenPos().Y));
+                ImGui.AlignTextToFramePadding();
+                if (Link("Not now##notnow", notNow))
+                    found = null;
+            }
+        });
+
+        // Rotating border while it's updating.
+        if (busy)
+            Theme.BusyBorder(start, new Vector2(start.X + ImGui.GetItemRectSize().X, ImGui.GetItemRectMin().Y), Theme.R(16));
+
+        // Finished: close a few seconds later, unless something failed (then the player closes it).
+        if (found != null && batch != null && !updater.IsBusy && closeFoundAt == null)
+        {
+            var failed = batch.Any(n => updater.States.TryGetValue(n, out var st) && st.Kind is UpdateStateKind.Failed or UpdateStateKind.NotFound);
+            if (!failed)
+                closeFoundAt = DateTime.UtcNow.AddSeconds(5);
+        }
+    }
+
+    private void StartBatch(List<string> names)
+    {
+        if (!plugin.Updater.IsAvailable)
+        {
+            OpenUpdater();
+            return;
+        }
+        batch = names;
+        plugin.Updater.UpdateMany(names);
+    }
+
+    private void DrawFoundRow(AvailableUpdate u, float left, float right)
+    {
+        var dl = ImGui.GetWindowDrawList();
+        ImGuiHelpers.ScaledDummy(1f);
+        var top = ImGui.GetCursorScreenPos().Y;
+        dl.AddLine(new Vector2(left, top), new Vector2(right, top), ImGui.GetColorU32(Theme.Border with { W = Theme.Border.W * 0.5f }));
+        ImGuiHelpers.ScaledDummy(2f);
+
+        using var id = ImRaii.PushId(u.InternalName);
+        ImGui.AlignTextToFramePadding();
+        if (batch == null)
+        {
+            var on = picked.Contains(u.InternalName);
+            if (ImGui.Checkbox("##pick", ref on))
+            {
+                if (on) picked.Add(u.InternalName);
+                else picked.Remove(u.InternalName);
+            }
+        }
+        else
+        {
+            var (text, color, spin) = BatchState(u.InternalName);
+            Theme.Pill(text, color);
+            if (spin)
+                Theme.BusyBorderAroundItem(1.5f, Theme.R(8) + S(1.5f));
+            if (ImGui.IsItemHovered() && plugin.Updater.States.TryGetValue(u.InternalName, out var st) && st.Message != null)
+                ImGui.SetTooltip(st.Message);
+        }
+        ImGui.SameLine();
+        var skipped = batch != null && !batch.Contains(u.InternalName);
+        ImGui.TextColored(skipped ? Theme.Muted : Theme.Text, u.Name);
+        ImGui.SameLine();
+        if (skipped)
+            ImGui.TextColored(Theme.Muted, $"stays on {u.InstalledVersion}");
+        else
+        {
+            ImGui.TextColored(Theme.Muted, $"{u.InstalledVersion} ->");
+            ImGui.SameLine(0, S(4));
+            ImGui.TextColored(Theme.AccentText, u.LatestVersion);
+        }
+
+        // Right: TESTING tag and a "changelog" link.
+        if (batch == null)
+        {
+            const string cl = "changelog";
+            var clW = ImGui.CalcTextSize(cl).X;
+            var tagW = u.IsTesting ? Theme.PillWidth("TESTING") + S(8) : 0f;
+            var x = right - clW - tagW;
+            ImGui.SameLine();
+            ImGui.SetCursorScreenPos(new Vector2(Math.Max(ImGui.GetCursorScreenPos().X, x), ImGui.GetCursorScreenPos().Y));
+            if (u.IsTesting)
+            {
+                Theme.Pill("TESTING", Theme.Amber);
+                ImGui.SameLine(0, S(8));
+            }
+            if (Link($"{cl}##cl", cl))
+            {
+                selectAvailableTab = true;
+                search = string.Empty;
+                expanded["a" + u.InternalName] = true;
+                jumpToCard = "a" + u.InternalName;
+            }
+        }
+    }
+
+    /// <summary>The label of a plugin in the running (or finished) batch.</summary>
+    private (string Text, Vector4 Color, bool Spin) BatchState(string name)
+    {
+        var grey = new Vector4(0.55f, 0.55f, 0.62f, 1f);
+        if (batch == null || !batch.Contains(name))
+            return ("Skipped", grey, false);
+        plugin.Updater.States.TryGetValue(name, out var st);
+        switch (st?.Kind)
+        {
+            case UpdateStateKind.Updated:
+                return ("Updated", Theme.Green, false);
+            case UpdateStateKind.Failed:
+            case UpdateStateKind.NotFound:
+                return ("Failed", Theme.Amber, false);
+            case UpdateStateKind.Updating:
+                // All waiting ones are marked "updating"; only the first of them is really being installed.
+                var first = batch.FirstOrDefault(n => plugin.Updater.States.TryGetValue(n, out var s2) && s2.Kind == UpdateStateKind.Updating);
+                return first == name ? ("Updating...", Theme.Pink, true) : ("Waiting", grey, false);
+            default:
+                return ("Waiting", grey, false);
+        }
     }
 
     private void DrawSettings()
