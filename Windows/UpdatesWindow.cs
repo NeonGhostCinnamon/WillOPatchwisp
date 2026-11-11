@@ -182,7 +182,9 @@ public class UpdatesWindow : Window
                         DrawAvailableTab();
                 }
 
-                using (var tab = ImRaii.TabItem("All plugins###all"))
+                var allFlags = selectAllTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
+                selectAllTab = false;
+                using (var tab = ImRaii.TabItem("All plugins###all", allFlags))
                 {
                     if (tab.Success)
                         DrawAllTab();
@@ -635,6 +637,20 @@ public class UpdatesWindow : Window
 
     // Set by a "(changelog)" link in chat: select the Recent tab and jump to this entry.
     private bool selectRecentTab;
+
+    // Set by "See older updates": select the All plugins tab and jump to that plugin's card.
+    private bool selectAllTab;
+    private string? jumpToCard;
+
+    /// <summary>Open this plugin's card on the All plugins tab, with its older updates.</summary>
+    public void ShowOlder(string internalName)
+    {
+        selectAllTab = true;
+        search = string.Empty;
+        var id = "i" + internalName;
+        expanded[id] = true;
+        jumpToCard = id;
+    }
     private string? jumpTo;
     private string? flashKey;
     private DateTime flashUntil;
@@ -901,6 +917,20 @@ public class UpdatesWindow : Window
                 ImGui.SetTooltip(ignored
                     ? "Show update alerts for this plugin again."
                     : "Hide this plugin's updates: no alerts, not in \"Available\" or \"Update all\". You can undo this in Settings.");
+
+            // "See older updates ->" on the right (under the buttons when there's no room).
+            const string olderText = "See older updates ->";
+            var linkW = ImGui.CalcTextSize(olderText).X;
+            ImGui.SameLine();
+            var linkX = right - linkW;
+            if (ImGui.GetCursorScreenPos().X + S(8) > linkX)
+                ImGui.NewLine();
+            ImGui.SetCursorScreenPos(new Vector2(Math.Max(ImGui.GetCursorScreenPos().X, linkX), ImGui.GetCursorScreenPos().Y));
+            ImGui.AlignTextToFramePadding();
+            if (Link($"{olderText}##older{key}", olderText))
+                ShowOlder(e.InternalName);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip($"Earlier versions of {e.Name} and what changed in them (All plugins tab).");
         }
         ImGui.Unindent(indent);
         var noteBottom = ImGui.GetItemRectMax().Y;
@@ -1071,7 +1101,7 @@ public class UpdatesWindow : Window
                 defaultOpen: false,
                 tag: plugin.IsIgnored(p.InternalName) ? ("IGNORED", new Vector4(0.55f, 0.55f, 0.62f, 1f)) : p.IsTesting ? ("TESTING", Theme.Amber) : null,
                 subtitle: p.ReleasedAt is { } r ? $"Released {Ago(r)}" : null,
-                p.Changelog, p.RepoUrl, version: p.Version, internalName: p.InternalName);
+                p.Changelog, p.RepoUrl, version: p.Version, internalName: p.InternalName, older: true);
         }
     }
 
@@ -1114,9 +1144,16 @@ public class UpdatesWindow : Window
 
     private void DrawCard(
         string id, string name, string versions, bool defaultOpen, (string Text, Vector4 Color)? tag,
-        string? subtitle, string? changelog, string? repoUrl, (string InternalName, string Name)? update = null, string? version = null, string? internalName = null)
+        string? subtitle, string? changelog, string? repoUrl, (string InternalName, string Name)? update = null, string? version = null, string? internalName = null, bool older = false)
     {
         var open = expanded.TryGetValue(id, out var o) ? o : defaultOpen;
+
+        // "See older updates" jumped here: scroll this card into view.
+        if (jumpToCard == id)
+        {
+            ImGui.SetScrollHereY(0.1f);
+            jumpToCard = null;
+        }
 
         Theme.Card(id, () =>
         {
@@ -1257,7 +1294,225 @@ public class UpdatesWindow : Window
                         ? "Show update alerts for this plugin again."
                         : "Hide this plugin's updates: no alerts, not in \"Available\" or \"Update all\". You can undo this in Settings.");
             }
+
+            if (older && internalName != null)
+                DrawOlderUpdates(internalName, repoUrl, version);
         });
+    }
+
+    // ---------------------------------------------------------------- older updates (All plugins tab)
+
+    private const int OlderFirst = 10;
+    private const int OlderStep = 5;
+    private readonly Dictionary<string, int> olderShown = new();
+    private readonly Dictionary<string, bool> olderOpen = new();
+
+    private sealed record OlderEntry(string Version, DateTime? Date, string Body, string? Url);
+
+    /// <summary>
+    /// Earlier versions of a plugin and their notes: from its GitHub releases, or from the updates
+    /// Will-o-Patchwisp recorded itself when the plugin isn't on GitHub. Up to 10 at first, then 5 more per click.
+    /// </summary>
+    private void DrawOlderUpdates(string internalName, string? repoUrl, string? version)
+    {
+        var left = Theme.CardInnerLeft;
+        var right = Theme.CardInnerRight;
+        var dl = ImGui.GetWindowDrawList();
+
+        ImGuiHelpers.ScaledDummy(3f);
+        var lineY = ImGui.GetCursorScreenPos().Y;
+        dl.AddLine(new Vector2(left, lineY), new Vector2(right, lineY), ImGui.GetColorU32(Theme.Border), S(1));
+        ImGuiHelpers.ScaledDummy(3f);
+
+        // Where the list comes from.
+        var current = GitHubChangelogs.Normalize(version);
+        List<OlderEntry> entries;
+        string source;
+        string? releasesUrl = null;
+        var gh = repoUrl != null ? plugin.GitHub.GetReleases(repoUrl) : null;
+        if (gh is { Status: GitHubLookupStatus.Loading })
+        {
+            ImGui.TextColored(Theme.AccentText, "Older updates");
+            ImGui.SameLine();
+            ImGui.TextColored(Theme.Muted, "looking on GitHub...");
+            return;
+        }
+
+        var fromGitHub = gh is { Status: GitHubLookupStatus.Found } ? OlderFromGitHub(gh.Items, current) : new List<OlderEntry>();
+        if (fromGitHub.Count > 0)
+        {
+            entries = fromGitHub;
+            source = "from GitHub releases";
+            releasesUrl = gh!.Url;
+        }
+        else
+        {
+            entries = OlderFromHistory(internalName, current);
+            source = "from your update history";
+        }
+
+        var shown = olderShown.TryGetValue(internalName, out var n) ? n : OlderFirst;
+        var countText = entries.Count == 0 ? string.Empty : $"{Math.Min(shown, entries.Count)} of {entries.Count}";
+
+        ImGui.TextColored(Theme.AccentText, "Older updates");
+        ImGui.SameLine();
+        ImGui.TextColored(Theme.Muted, source);
+        if (countText.Length > 0)
+        {
+            ImGui.SameLine(right - ImGui.CalcTextSize(countText).X - ImGui.GetWindowPos().X + ImGui.GetScrollX());
+            ImGui.TextColored(Theme.Muted, countText);
+        }
+
+        if (entries.Count == 0)
+        {
+            Theme.Wrapped(gh is { Status: GitHubLookupStatus.Failed }
+                ? $"GitHub couldn't be checked. {gh.Text}"
+                : "No older updates found yet. Updates Will-o-Patchwisp sees from now on are kept here too.", Theme.Muted);
+            if (gh is { Status: GitHubLookupStatus.Failed } && repoUrl != null && Theme.SmallButton($"Try GitHub again##older{internalName}"))
+                plugin.GitHub.RetryReleases(repoUrl);
+            return;
+        }
+
+        for (var i = 0; i < Math.Min(shown, entries.Count); i++)
+            DrawOlderEntry(internalName, entries[i], i == 0, left, right);
+
+        ImGuiHelpers.ScaledDummy(2f);
+        if (shown < entries.Count)
+        {
+            var more = Math.Min(OlderStep, entries.Count - shown);
+            if (Link($"Show {more} more##more{internalName}", $"Show {more} more"))
+                olderShown[internalName] = shown + OlderStep;
+            ImGui.SameLine();
+        }
+        if (releasesUrl != null)
+        {
+            const string all = "Open all releases on GitHub";
+            var x = right - ImGui.CalcTextSize(all).X;
+            if (ImGui.GetCursorScreenPos().X > x - S(8))
+                ImGui.NewLine();
+            ImGui.SetCursorScreenPos(new Vector2(Math.Max(ImGui.GetCursorScreenPos().X, x), ImGui.GetCursorScreenPos().Y));
+            if (Link($"{all}##rel{internalName}", all))
+                Util.OpenLink(releasesUrl);
+            if (ImGui.IsItemHovered())
+                ImGui.SetTooltip(releasesUrl);
+        }
+        else if (shown < entries.Count)
+        {
+            ImGui.NewLine();
+        }
+    }
+
+    /// <summary>One older version: a folding line (version, date, first change) with the notes under it when open.</summary>
+    private void DrawOlderEntry(string internalName, OlderEntry e, bool first, float left, float right)
+    {
+        var key = $"{internalName}|{e.Version}";
+        var open = olderOpen.TryGetValue(key, out var o) ? o : first;
+        var dl = ImGui.GetWindowDrawList();
+        var lineH = ImGui.GetTextLineHeight();
+        var barX = left + S(2);
+        var x0 = left + S(12);
+
+        var top = ImGui.GetCursorScreenPos();
+        ImGui.SetCursorScreenPos(new Vector2(left, top.Y));
+        if (ImGui.InvisibleButton($"##o{key}", new Vector2(right - left, lineH + S(2))))
+        {
+            open = !open;
+            olderOpen[key] = open;
+        }
+        var hovered = ImGui.IsItemHovered();
+        if (hovered)
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+
+        var x = x0;
+        using (Plugin.PluginInterface.UiBuilder.IconFontHandle.Push())
+        {
+            var chev = (open ? FontAwesomeIcon.CaretDown : FontAwesomeIcon.CaretRight).ToIconString();
+            var ink = Theme.InkBounds(chev);
+            dl.AddText(new Vector2(x - ink.X, top.Y + (lineH - (ink.Y + ink.W)) / 2f), ImGui.GetColorU32(hovered ? Theme.AccentText : Theme.Muted), chev);
+            x += S(12);
+        }
+        dl.AddText(new Vector2(x, top.Y), ImGui.GetColorU32(hovered ? Theme.AccentText : Theme.Text), e.Version);
+        x += ImGui.CalcTextSize(e.Version).X + S(8);
+        if (e.Date is { } d)
+        {
+            var date = d.ToString("d MMM yyyy");
+            dl.AddText(new Vector2(x, top.Y), ImGui.GetColorU32(Theme.Muted), date);
+            x += ImGui.CalcTextSize(date).X + S(8);
+        }
+        if (!open)
+        {
+            // First change, cut off at the card edge.
+            var firstLine = e.Body.Split('\n').Select(l => l.Trim().TrimStart('-', '*', ' ')).FirstOrDefault(l => l.Length > 0);
+            if (firstLine != null)
+            {
+                dl.PushClipRect(new Vector2(x, top.Y), new Vector2(right, top.Y + lineH + S(2)), true);
+                dl.AddText(new Vector2(x, top.Y), ImGui.GetColorU32(Theme.Muted), "· " + firstLine);
+                dl.PopClipRect();
+            }
+        }
+
+        ImGui.SetCursorScreenPos(new Vector2(left, top.Y + lineH + S(4)));
+        if (open)
+        {
+            ImGui.SetCursorScreenPos(new Vector2(x0, ImGui.GetCursorScreenPos().Y));
+            ImGui.BeginGroup();
+            using (ImRaii.TextWrapPos(ImGui.GetCursorPosX() + (right - x0)))
+                Theme.Wrapped(e.Body.Length > 0 ? e.Body : "No notes for this version.", e.Body.Length > 0 ? Theme.TextSoft : Theme.Muted);
+            ImGui.EndGroup();
+            ImGuiHelpers.ScaledDummy(2f);
+        }
+
+        // Thin accent line on the left of each version.
+        var bottom = ImGui.GetCursorScreenPos().Y - S(2);
+        dl.AddLine(new Vector2(barX, top.Y), new Vector2(barX, bottom), ImGui.GetColorU32(Theme.Pink with { W = open ? 0.8f : 0.4f }), S(2));
+    }
+
+    /// <summary>Releases older than the installed version (newest first).</summary>
+    private static List<OlderEntry> OlderFromGitHub(IReadOnlyList<GitHubRelease> releases, string? current)
+    {
+        var list = releases.ToList();
+        var index = current == null ? -1 : list.FindIndex(r => r.Version == current);
+        IEnumerable<GitHubRelease> older;
+        if (index >= 0)
+            older = list.Skip(index + 1);
+        else if (current != null && Version.TryParse(Pad(current), out var cur))
+            older = list.Where(r => r.Version == null || !Version.TryParse(Pad(r.Version), out var v) || v < cur);
+        else
+            older = list;
+        return older.Select(r => new OlderEntry(r.Version ?? r.Tag, r.Date, r.Body, r.Url)).ToList();
+    }
+
+    /// <summary>Updates Will-o-Patchwisp recorded for this plugin, minus the installed version (newest first).</summary>
+    private List<OlderEntry> OlderFromHistory(string internalName, string? current)
+        => plugin.Configuration.History
+            .Where(h => h.InternalName == internalName && GitHubChangelogs.Normalize(h.NewVersion) != current)
+            .GroupBy(h => h.NewVersion)
+            .Select(g => g.OrderByDescending(h => h.DetectedAt).First())
+            .OrderByDescending(h => h.DetectedAt)
+            .Select(h => new OlderEntry(h.NewVersion, h.DetectedAt, h.Changelog ?? string.Empty, null))
+            .ToList();
+
+    private static string Pad(string v)
+    {
+        var parts = v.Split('.').ToList();
+        while (parts.Count < 2) parts.Add("0");
+        return string.Join('.', parts);
+    }
+
+    /// <summary>Pink underlined text that works like a link.</summary>
+    private static bool Link(string id, string text)
+    {
+        var pos = ImGui.GetCursorScreenPos();
+        var size = ImGui.CalcTextSize(text);
+        var clicked = ImGui.InvisibleButton(id, size);
+        var hovered = ImGui.IsItemHovered();
+        var dl = ImGui.GetWindowDrawList();
+        var col = ImGui.GetColorU32(hovered ? Theme.Text : Theme.AccentText);
+        dl.AddText(pos, col, text);
+        dl.AddLine(new Vector2(pos.X, pos.Y + size.Y), new Vector2(pos.X + size.X, pos.Y + size.Y), col, S(1));
+        if (hovered)
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+        return clicked;
     }
 
     /// <summary>No changelog in the manifest: try the plugin's GitHub releases / commits instead.</summary>

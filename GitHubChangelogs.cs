@@ -25,6 +25,12 @@ public enum GitHubLookupStatus
 /// <param name="Url">Link to open on GitHub.</param>
 public sealed record GitHubLookup(GitHubLookupStatus Status, string? Text = null, string? Source = null, string? Url = null);
 
+/// <summary>One GitHub release: its tag, normalized version ("1.2.3"), date, cleaned-up notes and link.</summary>
+public sealed record GitHubRelease(string Tag, string? Version, DateTime? Date, string Body, string Url);
+
+/// <summary>All releases of a repository (newest first), or why they couldn't be read.</summary>
+public sealed record GitHubReleases(GitHubLookupStatus Status, IReadOnlyList<GitHubRelease> Items, string? Text = null, string? Url = null);
+
 /// <summary>
 /// Fallback for plugins that don't ship a changelog in their manifest: looks on the plugin's GitHub repository for
 /// 1) a release whose tag matches the version, 2) the latest release, 3) the most recent commit messages.
@@ -39,6 +45,7 @@ public sealed class GitHubChangelogs : IDisposable
     private readonly HttpClient http;
     private readonly CancellationTokenSource cts = new();
     private readonly ConcurrentDictionary<string, GitHubLookup> cache = new();
+    private readonly ConcurrentDictionary<string, GitHubReleases> releaseCache = new();
 
     public GitHubChangelogs()
     {
@@ -151,6 +158,94 @@ public sealed class GitHubChangelogs : IDisposable
         _ => "Something went wrong while reading GitHub's answer.",
     };
 
+    /// <summary>
+    /// Every release of the plugin's GitHub repository (up to 100, newest first), for "Older updates".
+    /// Read once per repository when first asked for, then cached; one request covers them all.
+    /// </summary>
+    public GitHubReleases GetReleases(string repoUrl)
+    {
+        var parsed = ParseRepo(repoUrl);
+        if (parsed == null)
+            return new GitHubReleases(GitHubLookupStatus.NotFound, Array.Empty<GitHubRelease>());
+
+        var (owner, repo) = parsed.Value;
+        var key = $"{owner}/{repo}".ToLowerInvariant();
+        if (releaseCache.TryGetValue(key, out var existing))
+            return existing;
+
+        var loading = new GitHubReleases(GitHubLookupStatus.Loading, Array.Empty<GitHubRelease>());
+        if (releaseCache.TryAdd(key, loading))
+        {
+            Task.Run(async () =>
+            {
+                GitHubReleases result;
+                try
+                {
+                    result = await WithRetryAsync(() => ReleasesAsync(owner, repo, cts.Token), owner, repo, cts.Token).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException) when (cts.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    Plugin.Log.Warning(ex, $"GitHub releases for {owner}/{repo} failed");
+                    result = new GitHubReleases(GitHubLookupStatus.Failed, Array.Empty<GitHubRelease>(), Describe(ex));
+                }
+
+                releaseCache[key] = result;
+            });
+        }
+
+        return loading;
+    }
+
+    /// <summary>Forget failed release list so it's tried again.</summary>
+    public void RetryReleases(string repoUrl)
+    {
+        if (ParseRepo(repoUrl) is { } p)
+            releaseCache.TryRemove($"{p.Owner}/{p.Repo}".ToLowerInvariant(), out _);
+    }
+
+    private async Task<GitHubReleases> ReleasesAsync(string owner, string repo, CancellationToken token)
+    {
+        var page = $"https://github.com/{owner}/{repo}/releases";
+        var json = await GetJsonAsync($"https://api.github.com/repos/{owner}/{repo}/releases?per_page=100", token).ConfigureAwait(false);
+        if (json is not { ValueKind: JsonValueKind.Array } arr)
+            return new GitHubReleases(GitHubLookupStatus.NotFound, Array.Empty<GitHubRelease>(), Url: page);
+
+        var list = new List<GitHubRelease>();
+        foreach (var r in arr.EnumerateArray())
+        {
+            if (r.TryGetProperty("draft", out var d) && d.ValueKind == JsonValueKind.True)
+                continue;
+            var tag = Str(r, "tag_name") ?? Str(r, "name") ?? string.Empty;
+            var version = Normalize(tag) ?? Normalize(Str(r, "name"));
+            DateTime? date = Str(r, "published_at") is { } ds && DateTime.TryParse(ds, out var dt) ? dt.ToLocalTime() : null;
+            list.Add(new GitHubRelease(tag, version, date, Clean(Str(r, "body")), Str(r, "html_url") ?? page));
+        }
+
+        return new GitHubReleases(list.Count > 0 ? GitHubLookupStatus.Found : GitHubLookupStatus.NotFound, list, Url: page);
+    }
+
+    /// <summary>Same retry rules as the changelog lookup: up to 3 tries for outages and timeouts.</summary>
+    private async Task<T> WithRetryAsync<T>(Func<Task<T>> run, string owner, string repo, CancellationToken token)
+    {
+        var delays = new[] { 2, 6 };
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await run().ConfigureAwait(false);
+            }
+            catch (Exception ex) when (attempt < delays.Length && IsTemporary(ex, token))
+            {
+                Plugin.Log.Debug($"GitHub lookup for {owner}/{repo} failed ({Describe(ex)}), retrying in {delays[attempt]}s");
+                await Task.Delay(TimeSpan.FromSeconds(delays[attempt]), token).ConfigureAwait(false);
+            }
+        }
+    }
+
     /// <summary>Forget a failed lookup so it's tried again.</summary>
     public void Retry(string repoUrl, string version)
     {
@@ -237,7 +332,7 @@ public sealed class GitHubChangelogs : IDisposable
         => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
     /// <summary>"v1.2.3" / "1.2.3.0" / "Release 1.2.3" -> "1.2.3" (trailing .0 parts removed).</summary>
-    private static string? Normalize(string? s)
+    public static string? Normalize(string? s)
     {
         if (string.IsNullOrEmpty(s))
             return null;
