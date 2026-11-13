@@ -197,9 +197,36 @@ public class UpdatesWindow : Window
         }
 
         DrawFooter();
+        FitToContent();
     }
 
     private float footerReserve;
+    private float childTopY;       // where the tab's list starts (window space)
+    private float childContentH;   // how tall the list is
+
+    /// <summary>Remembers the list's content height when the tab is done drawing (while its child is still open).</summary>
+    private readonly struct ContentMeasure(UpdatesWindow window) : IDisposable
+    {
+        public void Dispose() => window.childContentH = ImGui.GetCursorPosY();
+    }
+
+    /// <summary>
+    /// A card was just collapsed or expanded: make the window exactly as tall as the list needs (up to 90% of the
+    /// screen), so it shrinks when there's less to show and grows when there's more.
+    /// </summary>
+    private void FitToContent()
+    {
+        if (!Theme.CardToggled)
+            return;
+        Theme.CardToggled = false;
+        if (childTopY <= 0 || childContentH <= 0)
+            return;
+        var max = ImGui.GetMainViewport().WorkSize.Y * 0.9f;
+        var minH = NormalConstraints.MinimumSize.Y * ImGuiHelpers.GlobalScale;
+        var h = childTopY + childContentH + footerReserve + ImGui.GetStyle().WindowPadding.Y;
+        h = Math.Clamp(h, minH, Math.Max(minH, max));
+        sizeOnce = new Vector2(ImGui.GetWindowSize().X, h) / ImGuiHelpers.GlobalScale;
+    }
     private const string GitHubUrl = "https://github.com/NeonGhostCinnamon/WillOPatchwisp";
 
     /// <summary>Ko-fi and GitHub buttons, centred at the bottom of the window.</summary>
@@ -568,11 +595,20 @@ public class UpdatesWindow : Window
             using (plugin.TitleFont.Available ? plugin.TitleFont.Push() : null)
             {
                 ImGui.SetWindowFontScale(0.55f);
-                ImGui.TextColored(Theme.Text, title);
+                ImGui.TextColored(Theme.AccentText, title);
                 ImGui.SetWindowFontScale(1f);
             }
             var headY = ImGui.GetItemRectMin().Y;
             var headH = ImGui.GetItemRectSize().Y;
+
+            // Round button at the far right: collapses the card to just this row.
+            var foldD = ImGui.GetFrameHeight();
+            var foldClosed = plugin.Configuration.CollapsedCards.Contains(Theme.CardId);
+            var headAfter = ImGui.GetCursorScreenPos();
+            ImGui.SetCursorScreenPos(new Vector2(right - foldD, headY + (headH - foldD) / 2f));
+            foldClosed = Theme.FoldButton(plugin.Configuration.CollapsedCards, plugin.Configuration.Save, foldClosed);
+            ImGui.SetCursorScreenPos(headAfter);
+            right -= foldD + S(8);
             var close = "x";
             var closeW = ImGui.CalcTextSize(close).X;
             var checkedText = batch == null ? $"checked {foundAt:HH:mm}" : string.Empty;
@@ -589,8 +625,9 @@ public class UpdatesWindow : Window
                     ImGui.SetTooltip("Close");
             }
             ImGui.SetCursorScreenPos(after);
-            if (found == null)
+            if (found == null || foldClosed)
                 return;
+            right = Theme.CardInnerRight;
 
             if (batch == null)
             {
@@ -783,6 +820,8 @@ public class UpdatesWindow : Window
 
         Theme.Card("settings", () =>
         {
+            if (!Theme.CardHeader(plugin.TitleFont, "Settings", config.CollapsedCards, config.Save))
+                return;
             changed |= Checkbox("autoopen", "Open Will-o-Patchwisp when a plugin gets updated.", config.AutoOpenOnUpdate, v => config.AutoOpenOnUpdate = v);
             changed |= Checkbox("chat", "Print summary in chat.", config.PrintToChat, v => config.PrintToChat = v);
             changed |= DrawChatChannel(config);
@@ -822,7 +861,9 @@ public class UpdatesWindow : Window
     private void DrawIgnoreList()
     {
         var config = plugin.Configuration;
-        ImGui.TextColored(Theme.Text, "Ignored plugins");
+        if (!Theme.CardHeader(plugin.TitleFont, "Ignored plugins", config.CollapsedCards, config.Save,
+                config.IgnoredPlugins.Count == 0 ? "nothing ignored" : $"{config.IgnoredPlugins.Count} ignored"))
+            return;
         Theme.Wrapped("No update alerts for these, and they're left out of \"Available\" and \"Update all\".", Theme.Muted);
 
         // The installed plugins, looked up every few seconds instead of every frame.
@@ -1031,9 +1072,11 @@ public class UpdatesWindow : Window
         ImGui.SameLine(ImGui.GetContentRegionMax().X - ImGui.CalcTextSize(countText).X);
         ImGui.TextColored(Theme.Muted, countText);
 
+        childTopY = ImGui.GetCursorPosY();
         using var child = ImRaii.Child("##recent", new Vector2(0, -footerReserve), false);
         if (!child.Success)
             return;
+        using var measure = new ContentMeasure(this);
 
         if (entries.Count == 0)
         {
@@ -1064,12 +1107,23 @@ public class UpdatesWindow : Window
             var left = Theme.CardInnerLeft;
             var right = Theme.CardInnerRight;
             var lineH = ImGui.GetTextLineHeight();
+            float titleH;
+            using (plugin.TitleFont.Available ? plugin.TitleFont.Push() : null)
+            {
+                ImGui.SetWindowFontScale(0.55f);
+                titleH = ImGui.GetTextLineHeight();
+                ImGui.SetWindowFontScale(1f);
+            }
+            lineH = Math.Max(lineH, titleH);
 
             // Header: chevron, date, "N plugins" on the right. Click anywhere on it to open/minimize.
             var headTop = ImGui.GetCursorScreenPos();
             var countText = $"{rows.Count} plugin{(rows.Count == 1 ? "" : "s")}";
             if (ImGui.InvisibleButton("##head", new Vector2(right - left, lineH)))
+            {
                 dayOpen[day] = open = !open;
+                Theme.CardToggled = true;
+            }
             var hovered = ImGui.IsItemHovered();
             if (hovered)
                 ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
@@ -1081,8 +1135,13 @@ public class UpdatesWindow : Window
                 var ink = Theme.InkBounds(chev);
                 dl.AddText(headTop + new Vector2((lineH - (ink.Z - ink.X)) / 2f - ink.X, (lineH - (ink.Y + ink.W)) / 2f), ImGui.GetColorU32(Theme.AccentText), chev);
             }
-            dl.AddText(headTop + new Vector2(lineH + S(4), 0), ImGui.GetColorU32(open || hovered ? Theme.AccentText : Theme.TextSoft), $"{day:dddd d MMMM yyyy}");
-            dl.AddText(new Vector2(right - ImGui.CalcTextSize(countText).X, headTop.Y), ImGui.GetColorU32(Theme.Muted), countText);
+            using (plugin.TitleFont.Available ? plugin.TitleFont.Push() : null)
+            {
+                ImGui.SetWindowFontScale(0.55f);
+                dl.AddText(headTop + new Vector2(lineH + S(4), (lineH - ImGui.GetTextLineHeight()) / 2f), ImGui.GetColorU32(Theme.AccentText), $"{day:dddd d MMMM yyyy}");
+                ImGui.SetWindowFontScale(1f);
+            }
+            dl.AddText(new Vector2(right - ImGui.CalcTextSize(countText).X, headTop.Y + (lineH - ImGui.GetTextLineHeight()) / 2f), ImGui.GetColorU32(Theme.Muted), countText);
 
             if (!open)
                 return;
@@ -1150,6 +1209,7 @@ public class UpdatesWindow : Window
         {
             open = !open;
             expanded[id] = open;
+            Theme.CardToggled = true;
             if (open && !e.Seen)
             {
                 e.Seen = true;
@@ -1337,9 +1397,11 @@ public class UpdatesWindow : Window
             ImGuiHelpers.ScaledDummy(2f);
         }
 
+        childTopY = ImGui.GetCursorPosY();
         using var child = ImRaii.Child("##available", new Vector2(0, -footerReserve), false);
         if (!child.Success)
             return;
+        using var measure = new ContentMeasure(this);
 
         var list = visible.Where(u => Matches(u.Name, u.Changelog)).ToList();
         var ignoredCount = repos.Updates.Count - visible.Count;
@@ -1373,9 +1435,11 @@ public class UpdatesWindow : Window
 
         Theme.Wrapped("The changelog of the version you have installed right now, newest release first.", Theme.Muted);
 
+        childTopY = ImGui.GetCursorPosY();
         using var child = ImRaii.Child("##all", new Vector2(0, -footerReserve), false);
         if (!child.Success)
             return;
+        using var measure = new ContentMeasure(this);
 
         foreach (var p in installedCache!.Where(p => Matches(p.Name, p.Changelog)))
         {
@@ -1505,6 +1569,7 @@ public class UpdatesWindow : Window
             {
                 open = !open;
                 expanded[id] = open;
+                Theme.CardToggled = true;
             }
 
             if (!open)

@@ -829,6 +829,94 @@ internal static class Theme
     public static float CardInnerRight { get; private set; }
     public static float CardInnerWidth => CardInnerRight - CardInnerLeft;
 
+    // ---- collapsible cards
+
+    /// <summary>Id of the card being drawn (the key its collapsed state is saved under).</summary>
+    public static string CardId { get; private set; } = string.Empty;
+
+    /// <summary>Set when a card was just collapsed or expanded; the window reads and clears it to resize itself.</summary>
+    public static bool CardToggled { get; set; }
+
+    /// <summary>Right edge (screen X) for widgets on a card's title row: just left of the minimize button.</summary>
+    public static float CardTitleRight { get; private set; }
+
+    /// <summary>Top (screen Y) and height of the title row, for placing those widgets.</summary>
+    public static float CardTitleTop { get; private set; }
+    public static float CardTitleHeight { get; private set; }
+
+    /// <summary>Card title: pink, in the title font (Nunito).</summary>
+    public static void CardTitle(IFontHandle font, string text)
+    {
+        using (font.Available ? font.Push() : null)
+        {
+            ImGui.SetWindowFontScale(0.6f);
+            ImGui.TextColored(AccentText, text);
+            ImGui.SetWindowFontScale(1f);
+        }
+    }
+
+    /// <summary>
+    /// The round minimize / expand button at the cursor, for the current card. Returns the card's collapsed state
+    /// after any click (<paramref name="alsoToggle"/>: something else, like the title, was clicked too).
+    /// </summary>
+    public static bool FoldButton(ICollection<string> collapsed, Action save, bool closed, bool alsoToggle = false)
+    {
+        var toggle = alsoToggle;
+        if (IconCircle("##fold", closed ? FontAwesomeIcon.Plus : FontAwesomeIcon.Minus, Text, ImGui.GetFrameHeight()))
+            toggle = true;
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip(closed ? "Expand" : "Minimize");
+        if (!toggle)
+            return closed;
+        if (!collapsed.Remove(CardId))
+            collapsed.Add(CardId);
+        save();
+        CardToggled = true;
+        return !closed;
+    }
+
+    /// <summary>
+    /// The top row of a card: the title and, at the right, a round button that collapses or expands it (clicking the
+    /// title does the same). A short <paramref name="summary"/> shows next to the title while collapsed. Returns
+    /// true when the card is open; when it isn't, draw nothing else except widgets that belong on the title row.
+    /// </summary>
+    public static bool CardHeader(IFontHandle font, string title, ICollection<string> collapsed, Action save, string? summary = null)
+    {
+        var closed = collapsed.Contains(CardId);
+        var d = ImGui.GetFrameHeight();
+        var left = CardInnerLeft;
+        var top = ImGui.GetCursorScreenPos();
+
+        CardTitle(font, title);
+        var titleH = ImGui.GetItemRectSize().Y;
+        var hovered = ImGui.IsItemHovered();
+        var rowH = Math.Max(titleH, d);
+        if (closed && !string.IsNullOrEmpty(summary))
+        {
+            ImGui.SameLine(0, S(8));
+            ImGui.SetCursorScreenPos(new Vector2(ImGui.GetCursorScreenPos().X, top.Y + (titleH - ImGui.GetTextLineHeight()) / 2f));
+            ImGui.TextColored(Muted, summary);
+        }
+
+        var toggle = false;
+        if (hovered)
+        {
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+            toggle = ImGui.IsMouseClicked(ImGuiMouseButton.Left);
+        }
+
+        ImGui.SetCursorScreenPos(new Vector2(CardInnerRight - d, top.Y + (rowH - d) / 2f));
+        closed = FoldButton(collapsed, save, closed, toggle);
+
+        CardTitleRight = CardInnerRight - d - S(8);
+        CardTitleTop = top.Y;
+        CardTitleHeight = rowH;
+
+        ImGui.SetCursorScreenPos(new Vector2(left, top.Y + rowH));
+        ImGui.Dummy(Vector2.Zero);
+        return !closed;
+    }
+
     public static void Card(string id, Action body)
     {
         var dl = ImGui.GetWindowDrawList();
@@ -842,6 +930,8 @@ internal static class Theme
         ImGui.SetCursorScreenPos(start + pad);
         CardInnerLeft = start.X + pad.X;
         CardInnerRight = start.X + width - pad.X;
+        var prevCardId = CardId;
+        CardId = id;
         ImGui.PushID(id);
         ImGui.BeginGroup();
         ImGui.PushTextWrapPos(ImGui.GetCursorPosX() + width - pad.X * 2);
@@ -851,6 +941,7 @@ internal static class Theme
         ImGui.PopTextWrapPos();
         ImGui.EndGroup();
         ImGui.PopID();
+        CardId = prevCardId;
 
         var end = new Vector2(start.X + width, ImGui.GetItemRectMax().Y + pad.Y);
         var hovered = ImGui.IsMouseHoveringRect(start, end);

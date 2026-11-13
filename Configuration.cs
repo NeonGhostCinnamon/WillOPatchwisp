@@ -13,6 +13,9 @@ public class Configuration : IPluginConfiguration
     /// <summary>Open the window automatically when updates are detected.</summary>
     public bool AutoOpenOnUpdate { get; set; } = true;
 
+    /// <summary>Cards the player collapsed in the window (by card id), so they stay collapsed next time.</summary>
+    public HashSet<string> CollapsedCards { get; set; } = new();
+
     /// <summary>Print a short summary in chat when updates are detected.</summary>
     public bool PrintToChat { get; set; } = true;
 
