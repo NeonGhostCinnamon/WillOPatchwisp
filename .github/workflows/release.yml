@@ -137,3 +137,23 @@ jobs:
           git add repo.json
           git commit -m "Update repo.json to $VERSION" || echo "Nothing to commit"
           git push origin "$BRANCH"
+
+      # Posts the release to this plugin's changelog channel on Discord. Needs the DISCORD_BOT_TOKEN secret;
+      # without it the step does nothing, and a failed post never fails the release.
+      - name: Post the release to Discord
+        if: steps.v.outputs.skip != 'true'
+        continue-on-error: true
+        shell: bash
+        env:
+          TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          CHANNEL: "1570338936696344576"
+          NAME: Will-o-Patchwisp
+          TAG: ${{ steps.v.outputs.tag }}
+          CHANGELOG: ${{ steps.v.outputs.changelog }}
+          URL: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ steps.v.outputs.tag }}
+        run: |
+          if [ -z "$TOKEN" ]; then echo "No DISCORD_BOT_TOKEN secret, so nothing is posted."; exit 0; fi
+          jq -n --arg t "$NAME $TAG" --arg u "$URL" --arg d "${CHANGELOG:0:4000}" --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{embeds:[{title:$t,url:$u,description:$d,color:16743094,timestamp:$ts}],allowed_mentions:{parse:[]}}' > "$RUNNER_TEMP/discord.json"
+          curl -sS --fail-with-body -X POST "https://discord.com/api/v10/channels/$CHANNEL/messages" \
+            -H "Authorization: Bot $TOKEN" -H "Content-Type: application/json" --data @"$RUNNER_TEMP/discord.json"
