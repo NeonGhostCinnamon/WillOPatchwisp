@@ -17,7 +17,7 @@ public class UpdatesWindow : Window
 {
     private readonly Plugin plugin;
     private string search = string.Empty;
-    private bool showSettings;
+    private bool onSettingsTab;   // the Settings tab was showing last frame (the search box and check button hide there)
 
     // Cards the user has opened/closed by hand (otherwise the card's default applies).
     private readonly Dictionary<string, bool> expanded = new();
@@ -154,10 +154,9 @@ public class UpdatesWindow : Window
 
         if (found == null)
             DrawUpdateBanner();
-        DrawToolbar();
+        if (!onSettingsTab)
+            DrawToolbar();
         DrawFoundCard();
-        if (showSettings)
-            DrawSettings();
 
         ImGuiHelpers.ScaledDummy(2f);
 
@@ -193,6 +192,17 @@ public class UpdatesWindow : Window
                     if (tab.Success)
                         DrawAllTab();
                 }
+
+                var settingsOpen = false;
+                using (var tab = ImRaii.TabItem("Settings###settings"))
+                {
+                    if (tab.Success)
+                    {
+                        settingsOpen = true;
+                        DrawSettingsTab();
+                    }
+                }
+                onSettingsTab = settingsOpen;
             }
         }
 
@@ -522,12 +532,10 @@ public class UpdatesWindow : Window
                 : checkResultCount == 0
                     ? ("No updates found", Theme.CheckLook.Nothing, FontAwesomeIcon.BoxOpen)
                     : ($"{checkResultCount} update{(checkResultCount == 1 ? "" : "s")} found", Theme.CheckLook.Found, null);
-        var settingsLabel = showSettings ? "Hide settings" : "Settings";
         var checkW = Theme.CheckButtonWidth(checkLabel, look == Theme.CheckLook.Busy || icon != null);
-        var settingsW = ImGui.CalcTextSize(settingsLabel).X + style.FramePadding.X * 2;
 
         var avail = ImGui.GetContentRegionAvail().X;
-        var searchW = avail - checkW - settingsW - style.ItemSpacing.X * 2;
+        var searchW = avail - checkW - style.ItemSpacing.X;
         var oneRow = searchW >= S(150);
 
         ImGui.SetNextItemWidth(oneRow ? searchW : avail);
@@ -544,10 +552,6 @@ public class UpdatesWindow : Window
             manualCheck = true;
             checkResultUntil = default;
         }
-
-        ImGui.SameLine();
-        if (Theme.Button(settingsLabel))
-            showSettings = !showSettings;
     }
 
     // ---------------------------------------------------------------- "N updates found" card
@@ -811,6 +815,17 @@ public class UpdatesWindow : Window
             default:
                 return ("Waiting", grey, false);
         }
+    }
+
+    /// <summary>The Settings tab: the settings card and the ignored plugins, in a list that scrolls like the other tabs.</summary>
+    private void DrawSettingsTab()
+    {
+        childTopY = ImGui.GetCursorPosY();
+        using var child = ImRaii.Child("##settings", new Vector2(0, -footerReserve), false);
+        if (!child.Success)
+            return;
+        using var measure = new ContentMeasure(this);
+        DrawSettings();
     }
 
     private void DrawSettings()
