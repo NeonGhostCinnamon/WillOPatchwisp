@@ -5,7 +5,8 @@
 <br><br>
 
 <a href="#how-to-install"><img src="images/readme/btn-install.svg" alt="Install in Dalamud" height="46"></a>&nbsp;
-<a href="https://github.com/NeonGhostCinnamon/WillOPlugins"><img src="images/readme/btn-plugins.svg" alt="All my plugins" height="46"></a>
+<a href="https://github.com/NeonGhostCinnamon/WillOPlugins"><img src="images/readme/btn-plugins.svg" alt="All my plugins" height="46"></a>&nbsp;
+<a href="https://discord.gg/9Zgb3xyNst"><img src="images/readme/btn-discord.svg" alt="Join the Discord" height="46"></a>
 
 </div>
 
