@@ -10,6 +10,7 @@
   <ItemGroup>
     <!-- Plugin icon (shown in /xlplugins) -->
     <Content Include="images\icon.png" CopyToOutputDirectory="PreserveNewest" Visible="false" />
+    <Content Include="images\discord.png" CopyToOutputDirectory="PreserveNewest" Visible="false" />
     <!-- Nunito Black (SIL Open Font License), the font used on will-o-cinnamon.com -->
     <Content Include="Nunito-Black.ttf" CopyToOutputDirectory="PreserveNewest" Visible="false" />
     <Content Include="Nunito-OFL.txt" CopyToOutputDirectory="PreserveNewest" Visible="false" />

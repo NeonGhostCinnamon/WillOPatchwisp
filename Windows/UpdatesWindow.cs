@@ -260,8 +260,8 @@ public class UpdatesWindow : Window
     private void DrawFooter()
     {
         var spacing = ImGui.GetStyle().ItemSpacing.X;
-        var w = S(110);
-        var total = w * 2 + spacing;
+        var w = Math.Min(S(110), (ImGui.GetContentRegionAvail().X - spacing * 2) / 3f);
+        var total = w * 3 + spacing * 2;
         ImGui.SetCursorPosY(Math.Max(ImGui.GetCursorPosY(), ImGui.GetWindowHeight() - ImGui.GetStyle().WindowPadding.Y - (ImGui.GetFrameHeight() + S(4))));
         ImGui.SetCursorPosX(ImGui.GetCursorPosX() + Math.Max(0, (ImGui.GetContentRegionAvail().X - total) / 2f));
         if (Theme.LinkButton("##kofi", FontAwesomeIcon.Coffee, "Ko-fi", rainbow: true, width: w))
@@ -273,6 +273,11 @@ public class UpdatesWindow : Window
             Util.OpenLink(GitHubUrl);
         if (ImGui.IsItemHovered())
             ImGui.SetTooltip(GitHubUrl);
+        ImGui.SameLine();
+        if (Theme.DiscordButton("##discord", plugin.DiscordLogo, w))
+            Util.OpenLink(Theme.DiscordUrl);
+        if (ImGui.IsItemHovered())
+            ImGui.SetTooltip("Join the Will-o Discord");
     }
 
     // ---------------------------------------------------------------- light/dark toggle

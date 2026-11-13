@@ -178,6 +178,67 @@ internal static class Theme
     /// Glass button with an icon and a label (used for Ko-fi / GitHub). The border turns pink on hover;
     /// <paramref name="rainbow"/> makes the label's letters cycle through soft rainbow colours.
     /// </summary>
+    public const string DiscordUrl = "https://discord.gg/9Zgb3xyNst";
+
+    // The Discord button's word fades slowly through these soft colours: pink, lavender, sky blue, mint.
+    private static readonly Vector4[] DiscordColors =
+    {
+        Rgb(255, 156, 204), Rgb(201, 168, 255), Rgb(143, 211, 255), Rgb(156, 240, 192),
+    };
+
+    private static Vector4 DiscordColor(float phase)
+    {
+        var n = DiscordColors.Length;
+        var x = ((phase % 1f) + 1f) % 1f * n;
+        var i = (int)x;
+        return Vector4.Lerp(DiscordColors[i % n], DiscordColors[(i + 1) % n], x - i);
+    }
+
+    /// <summary>Footer button with the Discord logo and a word that slowly changes colour (plain text in the Dalamud theme).</summary>
+    public static bool DiscordButton(string id, Dalamud.Interface.Textures.ISharedImmediateTexture? logo, float width = 0)
+    {
+        const string label = "Discord";
+        var h = ImGui.GetFrameHeight() + S(4);
+        var gap = S(7);
+        var iconH = h * 0.5f;
+        var iconW = iconH * 128f / 96f;
+        var labelW = ImGui.CalcTextSize(label).X;
+        var w = width > 0 ? width : iconW + gap + labelW + S(26);
+
+        var pos = ImGui.GetCursorScreenPos();
+        var clicked = ImGui.InvisibleButton(id, new Vector2(w, h));
+        var hovered = ImGui.IsItemHovered();
+        var active = ImGui.IsItemActive();
+
+        var dl = ImGui.GetWindowDrawList();
+        dl.AddRectFilled(pos, pos + new Vector2(w, h), ImGui.GetColorU32(active ? GlassHover with { W = GlassHover.W + 0.06f } : hovered ? GlassHover : Glass), R(10));
+        dl.AddRect(pos, pos + new Vector2(w, h), ImGui.GetColorU32(hovered ? (UseDalamud ? Text : Pink) : Border), R(10), ImDrawFlags.None, hovered ? S(1.6f) : S(1.2f));
+
+        var startX = pos.X + (w - (iconW + gap + labelW)) / 2f;
+        var cy = pos.Y + h / 2f;
+        if (logo != null)
+        {
+            var wrap = logo.GetWrapOrEmpty();
+            dl.AddImage(wrap.Handle, new Vector2(startX, cy - iconH / 2f), new Vector2(startX + iconW, cy + iconH / 2f));
+        }
+
+        var ink = InkBounds(label);
+        var tx = startX + iconW + gap;
+        var ty = cy - (ink.Y + ink.W) / 2f;
+        var t = (float)ImGui.GetTime();
+        for (var i = 0; i < label.Length; i++)
+        {
+            var ch = label[i].ToString();
+            var color = UseDalamud ? Text : DiscordColor(t * 0.15f - i * 0.07f);
+            dl.AddText(new Vector2(tx, ty), ImGui.GetColorU32(color), ch);
+            tx += ImGui.CalcTextSize(ch).X;
+        }
+
+        if (hovered)
+            ImGui.SetMouseCursor(ImGuiMouseCursor.Hand);
+        return clicked;
+    }
+
     public static bool LinkButton(string id, FontAwesomeIcon icon, string label, bool rainbow = false, float width = 0)
     {
         var h = ImGui.GetFrameHeight() + S(4);
