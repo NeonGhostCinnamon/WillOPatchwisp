@@ -173,7 +173,10 @@ public class UpdatesWindow : Window
                 using (var tab = ImRaii.TabItem(unseen > 0 ? $"Recent ({unseen})###recent" : "Recent###recent", recentFlags))
                 {
                     if (tab.Success)
+                    {
+                        currentTab = "recent";
                         DrawRecentTab();
+                    }
                 }
 
                 var available = plugin.VisibleUpdates.Count;
@@ -182,7 +185,10 @@ public class UpdatesWindow : Window
                 using (var tab = ImRaii.TabItem(available > 0 ? $"Available ({available})###available" : "Available###available", availableFlags))
                 {
                     if (tab.Success)
+                    {
+                        currentTab = "available";
                         DrawAvailableTab();
+                    }
                 }
 
                 var allFlags = selectAllTab ? ImGuiTabItemFlags.SetSelected : ImGuiTabItemFlags.None;
@@ -190,7 +196,10 @@ public class UpdatesWindow : Window
                 using (var tab = ImRaii.TabItem("All plugins###all", allFlags))
                 {
                     if (tab.Success)
+                    {
+                        currentTab = "all";
                         DrawAllTab();
+                    }
                 }
 
                 var settingsOpen = false;
@@ -199,6 +208,7 @@ public class UpdatesWindow : Window
                     if (tab.Success)
                     {
                         settingsOpen = true;
+                        currentTab = "settings";
                         DrawSettingsTab();
                     }
                 }
@@ -220,18 +230,25 @@ public class UpdatesWindow : Window
         public void Dispose() => window.childContentH = ImGui.GetCursorPosY();
     }
 
+    private string? currentTab;
+    private string? lastTab;
+
     /// <summary>
-    /// A card was just collapsed or expanded: make the window exactly as tall as the list needs (up to 90% of the
-    /// screen), so it shrinks when there's less to show and grows when there's more.
+    /// After a card was collapsed or expanded, and whenever another tab opens: make the window as tall as the list
+    /// needs, but at most 60% of the screen (the lists can be very long).
     /// </summary>
     private void FitToContent()
     {
-        if (!Theme.CardToggled)
-            return;
+        var tabChanged = currentTab != lastTab;
+        var first = lastTab == null;   // the first frame keeps the size the window had when it was closed
+        lastTab = currentTab;
+        var toggled = Theme.CardToggled;
         Theme.CardToggled = false;
+        if (!toggled && (!tabChanged || first))
+            return;
         if (childTopY <= 0 || childContentH <= 0)
             return;
-        var max = ImGui.GetMainViewport().WorkSize.Y * 0.9f;
+        var max = ImGui.GetMainViewport().WorkSize.Y * 0.6f;
         var minH = NormalConstraints.MinimumSize.Y * ImGuiHelpers.GlobalScale;
         var h = childTopY + childContentH + footerReserve + ImGui.GetStyle().WindowPadding.Y;
         h = Math.Clamp(h, minH, Math.Max(minH, max));
